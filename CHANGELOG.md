@@ -13,6 +13,13 @@ raised, never by hand.
 
 ## Unreleased
 
+### Added
+
+- **`cid config actions`** lists every action `[shell.bindings]` and
+  `[shell.aliases]` can name, with the keys and aliases your configuration
+  gives each, the command it runs and what it does. Actions nothing is bound to
+  are listed too, so finding a free one no longer means reading the source.
+
 ## v0.20.0
 
 *Released 2026-09-15*

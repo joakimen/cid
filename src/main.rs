@@ -263,7 +263,8 @@ enum Command {
     /// `[shell.aliases]`, which name actions rather than shell code. cid
     /// binds nothing on its own: `cid config init` writes a suggested set out
     /// commented, and until a table is written nothing is bound. `cid config
-    /// check` says whether yours resolve; a configuration that will not parse,
+    /// actions` lists every action there is to name, and `cid config check`
+    /// says whether yours resolve; a configuration that will not parse,
     /// or that names an action cid does not define, stops this command rather
     /// than emitting a shell where one key silently does nothing.
     Init {
@@ -858,6 +859,15 @@ enum ConfigCmd {
     ///
     /// Whether what the settings point at is actually there is `config check`.
     Print,
+    /// List every action a key binding or alias can name
+    ///
+    /// One row per action, bound or not: its name, the keys `[shell.bindings]`
+    /// gives it, the names `[shell.aliases]` gives it, the command it runs and
+    /// what that does. An empty key or alias column is `-`, so the first three
+    /// columns are always one word each for `awk` or `cut`.
+    ///
+    /// The names in the first column are what the two tables take as values.
+    Actions,
     /// Print the configuration file path
     Path,
     /// Check everything cid depends on and report what is wrong
@@ -1091,6 +1101,7 @@ fn dispatch(ctx: &Ctx, command: Command) -> anyhow::Result<()> {
         Command::Config { command } => match command {
             ConfigCmd::Init { force } => cmd::config::init(ctx, force),
             ConfigCmd::Print => cmd::config::print(ctx),
+            ConfigCmd::Actions => cmd::config::actions(ctx),
             ConfigCmd::Path => cmd::config::path(ctx),
             ConfigCmd::Check => cmd::config::check(ctx),
         },

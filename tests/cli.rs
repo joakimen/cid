@@ -466,6 +466,33 @@ fn config_print_says_when_no_key_is_bound() {
     assert!(!run.stdout.contains("ctrl-o"), "{}", run.stdout);
 }
 
+/// Every action is listed, bound or not, with the keys and names the config
+/// gives it.
+#[test]
+fn config_actions_lists_every_action_with_what_is_bound_to_it() {
+    let sandbox = Sandbox::new();
+    sandbox.write_config(
+        "[shell.bindings]\nctrl-o = \"repo-cd\"\n\n[shell.aliases]\nkl = \"proc-kill\"\n",
+    );
+
+    let run = sandbox.run(&["config", "actions"]);
+    run.ok();
+    let columns = |id: &str| -> Vec<String> {
+        run.lines()
+            .into_iter()
+            .find(|line| line.split_whitespace().next() == Some(id))
+            .unwrap_or_else(|| panic!("no {id} row in:\n{}", run.stdout))
+            .split_whitespace()
+            .take(3)
+            .map(str::to_string)
+            .collect()
+    };
+    assert_eq!(columns("repo-cd"), ["repo-cd", "ctrl-o", "-"]);
+    assert_eq!(columns("proc-kill"), ["proc-kill", "-", "kl"]);
+    assert_eq!(columns("worktree-cd"), ["worktree-cd", "-", "-"]);
+    assert!(run.stdout.contains("cid ps kill --force"), "{}", run.stdout);
+}
+
 #[test]
 fn config_init_refuses_to_clobber_without_force() {
     let sandbox = Sandbox::new();

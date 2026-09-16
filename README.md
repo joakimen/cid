@@ -82,8 +82,9 @@ b  = "project-build"        # cid project build
 ```
 
 What a table holds is the whole of what is bound, so leaving a key out is how
-it stays free. `cid config print` lists what you have with what each action
-does, and `cid config check` says whether they all resolve — an action cid
+it stays free. `cid config actions` lists every action with whatever is bound
+to it, `cid config print` lists what you have, and `cid config check` says
+whether they all resolve — an action cid
 does not define stops `cid init` rather than emitting a shell where one key
 silently does nothing.
 
