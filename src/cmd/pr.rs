@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Result, bail};
 
 use crate::Ctx;
+use crate::cmd::worktree;
 use crate::gh::{self, MergeMethod, PullRequest};
 use crate::git;
 use crate::select::{self, Preview, SelectItem};
@@ -278,6 +279,21 @@ const OPEN: select::Action = select::Action::new("f2", "open");
 /// the prompt, and f7 here.
 const CHECKOUT: select::Action = select::Action::new("f7", "check out");
 
+/// Check the highlighted pull request out in a worktree of its own — ctrl-f7 at
+/// the prompt, and ctrl-f7 here. Only the prompt's binding can `cd` into it;
+/// from here the path is printed.
+const WORKTREE: select::Action = select::Action::new("ctrl-f7", "worktree");
+
+/// A pull request settled on, and the key that settled it when it was not
+/// enter.
+struct Chosen {
+    number: u64,
+    /// The branch it was opened from, where the list it was chosen from said so.
+    /// A number given outright comes without one.
+    head: Option<String>,
+    action: Option<&'static str>,
+}
+
 /// Fuzzy-select one pull request and return its number, with
 /// [`REFRESH_KEY`](select::REFRESH_KEY) asking `gh` again in place. A failed
 /// reload leaves the rows as they were and says so once the selector closes.
@@ -291,7 +307,7 @@ fn select(
     prompt: &str,
     tint: Tint,
     actions: &'static [select::Action],
-) -> Result<(u64, Option<&'static str>)> {
+) -> Result<Chosen> {
     let prs = collect(ctx, state, limit)?;
     // Built before the shared list exists: a `known.lock()` written inline in
     // the `select_one_reloading` call below would hold its guard for the whole
@@ -330,15 +346,26 @@ fn select(
         .value
         .parse()
         .map_err(|_| anyhow::anyhow!("unexpected selector result: {}", chosen.value))?;
-    Ok((number, chosen.action))
+    let head = known
+        .lock()
+        .expect("pull request list poisoned")
+        .iter()
+        .find(|pr| pr.number == number)
+        .map(|pr| pr.head_ref_name.clone());
+    Ok(Chosen {
+        number,
+        head,
+        action: chosen.action,
+    })
 }
 
 /// Do what the key the selector closed on asked for, or `Ok(false)` when it was
 /// enter and the command it was opened for is what should happen.
-fn acted_on(number: u64, action: Option<&'static str>) -> Result<bool> {
-    match action {
-        Some(key) if key == OPEN.key => gh::view_web(number).map(|()| true),
-        Some(key) if key == CHECKOUT.key => gh::checkout(number).map(|()| true),
+fn acted_on(ctx: &Ctx, chosen: &Chosen) -> Result<bool> {
+    match chosen.action {
+        Some(key) if key == OPEN.key => gh::view_web(chosen.number).map(|()| true),
+        Some(key) if key == CHECKOUT.key => gh::checkout(chosen.number).map(|()| true),
+        Some(key) if key == WORKTREE.key => checkout_worktree(ctx, chosen).map(|()| true),
         _ => Ok(false),
     }
 }
@@ -347,21 +374,21 @@ fn acted_on(number: u64, action: Option<&'static str>) -> Result<bool> {
 /// composes with `gh`: `gh pr view (cid pr sel)`.
 pub fn sel(ctx: &Ctx, state: &str, limit: usize) -> Result<()> {
     ensure_target(ctx)?;
-    let (number, action) = select(
+    let chosen = select(
         ctx,
         state,
         limit,
         "Select a pull request",
         Tint::State,
-        &[OPEN, CHECKOUT],
+        &[OPEN, CHECKOUT, WORKTREE],
     )?;
-    if acted_on(number, action)? {
+    if acted_on(ctx, &chosen)? {
         // The number is not printed: nothing is waiting for it, and a caller
         // substituting this command asked for a number rather than for the
         // browser to open.
         return Ok(());
     }
-    println!("{number}");
+    println!("{}", chosen.number);
     Ok(())
 }
 
@@ -376,9 +403,13 @@ fn resolve(
     prompt: &str,
     tint: Tint,
     actions: &'static [select::Action],
-) -> Result<(u64, Option<&'static str>)> {
+) -> Result<Chosen> {
     match number {
-        Some(number) => Ok((number, None)),
+        Some(number) => Ok(Chosen {
+            number,
+            head: None,
+            action: None,
+        }),
         None => select(ctx, state, limit, prompt, tint, actions),
     }
 }
@@ -386,22 +417,80 @@ fn resolve(
 /// `cid pr checkout [number]` — check out a pull request's branch, selecting
 /// one when no number is given. The checkout itself is `gh pr checkout`, which
 /// handles fork PRs and sets the upstream.
-pub fn checkout(ctx: &Ctx, number: Option<u64>, state: &str, limit: usize) -> Result<()> {
+///
+/// With `worktree`, the branch goes in a tree of its own instead, and the
+/// tree's path is what is printed — see [`checkout_worktree`].
+pub fn checkout(
+    ctx: &Ctx,
+    number: Option<u64>,
+    worktree: bool,
+    state: &str,
+    limit: usize,
+) -> Result<()> {
     ensure_target(ctx)?;
-    // Only `open` beside it: `check out` is what enter already does.
-    let (number, action) = resolve(
-        ctx,
-        number,
-        state,
-        limit,
-        "Check out a pull request",
-        Tint::State,
-        &[OPEN],
-    )?;
-    if acted_on(number, action)? {
+    // Beside it, the verbs enter does not already perform.
+    let (prompt, actions): (&str, &'static [select::Action]) = if worktree {
+        ("Check out a pull request in a worktree", &[OPEN, CHECKOUT])
+    } else {
+        ("Check out a pull request", &[OPEN, WORKTREE])
+    };
+    let chosen = resolve(ctx, number, state, limit, prompt, Tint::State, actions)?;
+    if acted_on(ctx, &chosen)? {
         return Ok(());
     }
-    gh::checkout(number)
+    if worktree {
+        checkout_worktree(ctx, &chosen)
+    } else {
+        gh::checkout(chosen.number)
+    }
+}
+
+/// Check a pull request out in a working tree of its own and print the tree's
+/// path, for a shell to `cd` into.
+///
+/// The tree goes where `worktree add` would put one for the pull request's
+/// branch. It is created detached and `gh pr checkout` runs inside it, so a
+/// pull request from a fork gets the same remote and upstream it would in the
+/// main tree. A tree that already has the branch checked out is where the user
+/// is sent instead, since git will not check one branch out twice.
+fn checkout_worktree(ctx: &Ctx, chosen: &Chosen) -> Result<()> {
+    let repo_root = git::require_repo_root()?;
+    let branch = match &chosen.head {
+        Some(head) => head.clone(),
+        None => {
+            let _spinner = term::spinner("looking up the pull request's branch", ctx.color());
+            gh::head_branch(chosen.number)?
+        }
+    };
+
+    let trees = git::worktrees(&repo_root)?;
+    if let Some(tree) = tree_with_branch(&trees, &branch) {
+        eprintln!("note: `{branch}` is already checked out in a worktree");
+        println!("{}", tree.path.display());
+        return Ok(());
+    }
+
+    let path = worktree::new_tree_path(ctx, &repo_root, &branch)?;
+    git::add_detached_worktree(&path)?;
+    if let Err(err) = gh::checkout_in(&path, chosen.number) {
+        // A tree with no branch in it is not the half of this worth keeping.
+        if let Err(cleanup) = git::remove_worktree(&path, true) {
+            ctx.log
+                .warn(&format!("could not remove {}: {cleanup:#}", path.display()));
+        }
+        return Err(err);
+    }
+    worktree::exclude_root(ctx, &repo_root);
+
+    println!("{}", path.display());
+    Ok(())
+}
+
+/// The tree that has `branch` checked out, if one does.
+fn tree_with_branch<'a>(trees: &'a [git::Worktree], branch: &str) -> Option<&'a git::Worktree> {
+    trees
+        .iter()
+        .find(|tree| !tree.prunable && tree.branch == branch)
 }
 
 /// `cid pr open [number]` — open a pull request in the browser, selecting one
@@ -417,19 +506,19 @@ pub fn open(
     if current {
         return open_current(ctx);
     }
-    let (number, action) = resolve(
+    let chosen = resolve(
         ctx,
         number,
         state,
         limit,
         "Open a pull request",
         Tint::State,
-        &[CHECKOUT],
+        &[CHECKOUT, WORKTREE],
     )?;
-    if acted_on(number, action)? {
+    if acted_on(ctx, &chosen)? {
         return Ok(());
     }
-    gh::view_web(number)
+    gh::view_web(chosen.number)
 }
 
 /// `cid pr open --current` — open the pull request for the checked-out
@@ -490,7 +579,7 @@ pub fn merge(
     ensure_target(ctx)?;
     // `open` above all: reading a pull request before merging it is the thing
     // most likely to be wanted between choosing one and merging it.
-    let (number, action) = resolve(
+    let chosen = resolve(
         ctx,
         number,
         state,
@@ -499,10 +588,10 @@ pub fn merge(
         Tint::Readiness,
         &[OPEN],
     )?;
-    if acted_on(number, action)? {
+    if acted_on(ctx, &chosen)? {
         return Ok(());
     }
-    gh::merge(number, method, delete_branch, auto)
+    gh::merge(chosen.number, method, delete_branch, auto)
 }
 
 #[cfg(test)]
@@ -541,6 +630,42 @@ mod tests {
         ]"#,
         )
         .unwrap()
+    }
+
+    fn tree(branch: &str, prunable: bool) -> git::Worktree {
+        git::Worktree {
+            path: format!("/trees/{branch}").into(),
+            branch: branch.to_string(),
+            prunable,
+            ..git::Worktree::default()
+        }
+    }
+
+    #[test]
+    fn a_branch_already_in_a_tree_is_found_there() {
+        let trees = [tree("main", false), tree("feat/x", false)];
+        let found = tree_with_branch(&trees, "feat/x").map(|tree| tree.path.clone());
+        assert_eq!(found, Some("/trees/feat/x".into()));
+        assert!(tree_with_branch(&trees, "feat").is_none());
+    }
+
+    /// A tree whose directory is gone is nowhere to send a shell.
+    #[test]
+    fn a_prunable_tree_does_not_count_as_holding_its_branch() {
+        let trees = [tree("feat/x", true)];
+        assert!(tree_with_branch(&trees, "feat/x").is_none());
+    }
+
+    #[test]
+    fn the_worktree_key_is_not_one_another_action_uses() {
+        let keys = [OPEN.key, CHECKOUT.key, WORKTREE.key];
+        for (index, key) in keys.iter().enumerate() {
+            assert!(!keys[index + 1..].contains(key), "{key} is bound twice");
+            assert!(
+                skim::binds::parse_key(key).is_ok(),
+                "skim cannot read {key}"
+            );
+        }
     }
 
     #[test]

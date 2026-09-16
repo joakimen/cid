@@ -180,10 +180,11 @@ enum Command {
     /// In a pull request selector, ctrl-r asks GitHub again and reloads the list
     /// in place, for when a check has finished while you were looking at it.
     ///
-    /// f2 opens the highlighted pull request in the browser and f7 checks it
-    /// out, whichever verb the selector was opened for — the same keys that do
-    /// those things from the prompt in fish. Answering "which one" is the work;
-    /// which verb you meant is a key, not another command.
+    /// f2 opens the highlighted pull request in the browser, f7 checks it out
+    /// and ctrl-f7 checks it out in a worktree of its own, whichever verb the
+    /// selector was opened for — the same keys that do those things from the
+    /// prompt in fish. Answering "which one" is the work; which verb you meant
+    /// is a key, not another command.
     Pr {
         #[command(subcommand)]
         command: PrCmd,
@@ -674,6 +675,14 @@ enum PrCmd {
     Checkout {
         /// Pull request number
         number: Option<u64>,
+        /// Check it out in a worktree of its own, and print the tree's path
+        ///
+        /// The tree goes where `worktree add` puts one for the pull request's
+        /// branch, so the tree you are working in is left as it is. The path
+        /// is the only thing on stdout — `cd (cid pr checkout -w 12)`. A branch
+        /// some tree already has checked out prints that tree's path instead.
+        #[arg(short, long)]
+        worktree: bool,
         #[command(flatten)]
         scope: PrScope,
     },
@@ -1047,9 +1056,11 @@ fn dispatch(ctx: &Ctx, command: Command) -> anyhow::Result<()> {
         Command::Pr { command } => match command {
             PrCmd::Ls { status, scope } => cmd::pr::ls(ctx, &scope.state, scope.limit, status),
             PrCmd::Sel { scope } => cmd::pr::sel(ctx, &scope.state, scope.limit),
-            PrCmd::Checkout { number, scope } => {
-                cmd::pr::checkout(ctx, number, &scope.state, scope.limit)
-            }
+            PrCmd::Checkout {
+                number,
+                worktree,
+                scope,
+            } => cmd::pr::checkout(ctx, number, worktree, &scope.state, scope.limit),
             PrCmd::Open {
                 number,
                 current,

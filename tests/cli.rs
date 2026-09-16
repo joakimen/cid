@@ -948,6 +948,112 @@ fn worktree_add_refuses_a_path_that_is_already_a_tree() {
     assert!(again.stderr.contains("already exists"), "{}", again.stderr);
 }
 
+// --- pull requests in worktrees ---------------------------------------------
+
+/// A `gh` that knows two pull requests: #7 from `fix/login`, whose checkout
+/// narrates on stdout the way the real one does, and #9, whose checkout fails.
+/// Returns the directory to put first on `PATH`.
+fn stub_gh(home: &Path) -> PathBuf {
+    let bin = home.join("stub-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let gh = bin.join("gh");
+    std::fs::write(
+        &gh,
+        r#"#!/bin/sh
+case "$1 $2 $3" in
+    "pr view 7") echo fix/login ;;
+    "pr view 9") echo fix/broken ;;
+    "pr checkout 7") git checkout -q -b fix/login && echo "Switched to branch 'fix/login'" ;;
+    "pr checkout 9") echo "could not check out #9" >&2; exit 4 ;;
+    *) echo "stub gh: unexpected: $*" >&2; exit 1 ;;
+esac
+"#,
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    bin
+}
+
+/// `PATH` with the stub `gh` ahead of everything else.
+fn path_with(bin: &Path) -> String {
+    format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    )
+}
+
+#[test]
+fn pr_checkout_worktree_puts_the_branch_in_a_tree_and_prints_only_its_path() {
+    let sandbox = Sandbox::new();
+    let (main, _) = mk_worktree_repo(sandbox.home());
+    let path = path_with(&stub_gh(sandbox.home()));
+
+    let run = sandbox.run_full(
+        &main,
+        &["pr", "checkout", "7", "--worktree"],
+        &[("PATH", &path)],
+    );
+    run.ok();
+
+    let tree = main.join(".worktrees/fix-login");
+    assert_eq!(run.lines(), vec![real(&tree)], "stderr: {}", run.stderr);
+    assert!(run.stderr.contains("Switched to branch"), "{}", run.stderr);
+    assert_eq!(
+        git_in(
+            &tree,
+            sandbox.home(),
+            &["rev-parse", "--abbrev-ref", "HEAD"]
+        )
+        .trim(),
+        "fix/login",
+    );
+    assert_eq!(
+        git_in(
+            &main,
+            sandbox.home(),
+            &["rev-parse", "--abbrev-ref", "HEAD"]
+        )
+        .trim(),
+        "main",
+        "the tree the shell was in was checked out instead",
+    );
+}
+
+/// git will not check one branch out in two trees, and the tree that already
+/// has it is where the user was headed.
+#[test]
+fn pr_checkout_worktree_sends_you_to_the_tree_that_already_has_the_branch() {
+    let sandbox = Sandbox::new();
+    let (main, feat) = mk_worktree_repo(sandbox.home());
+    git_in(&feat, sandbox.home(), &["switch", "-c", "fix/login"]);
+    let path = path_with(&stub_gh(sandbox.home()));
+
+    let run = sandbox.run_full(&main, &["pr", "checkout", "-w", "7"], &[("PATH", &path)]);
+    run.ok();
+    assert_eq!(run.lines(), vec![real(&feat)]);
+    assert!(run.stderr.contains("already checked out"), "{}", run.stderr);
+}
+
+#[test]
+fn a_failed_pr_checkout_leaves_no_tree_behind() {
+    let sandbox = Sandbox::new();
+    let (main, _) = mk_worktree_repo(sandbox.home());
+    let path = path_with(&stub_gh(sandbox.home()));
+
+    let run = sandbox.run_full(
+        &main,
+        &["pr", "checkout", "9", "--worktree"],
+        &[("PATH", &path)],
+    );
+    run.code(4);
+    assert!(run.stdout.is_empty(), "{}", run.stdout);
+    let trees = git_in(&main, sandbox.home(), &["worktree", "list", "--porcelain"]);
+    assert_eq!(trees.matches("worktree ").count(), 2, "{trees}");
+    assert!(!main.join(".worktrees/fix-broken").exists());
+}
+
 #[test]
 fn worktree_rm_removes_the_tree_it_is_given() {
     let sandbox = Sandbox::new();
