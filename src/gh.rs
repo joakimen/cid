@@ -1133,7 +1133,7 @@ mod tests {
     }
 
     /// A repository with neither description nor language comes back with
-    /// nulls, not with the empty strings GraphQL used to send.
+    /// nulls rather than empty strings.
     #[test]
     fn a_repository_with_nothing_written_about_it_still_parses() {
         let repos = parse_repos(r#"[{"full_name":"acme/api","description":null,"language":null}]"#)

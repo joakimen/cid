@@ -11,14 +11,13 @@ use std::sync::mpsc::sync_channel;
 
 use ignore::{WalkBuilder, WalkState};
 
-/// Directory names never worth walking into, matching the `--walker-skip` list
-/// this replaced. `.gitignore` covers most build output; these are the
-/// directories that are commonly *not* ignored yet never worth offering.
+/// Directory names never worth walking into. `.gitignore` covers most build
+/// output; these are the directories that are commonly *not* ignored yet never
+/// worth offering.
 ///
-/// Every name here must be one that never holds source. `lib` was on this list
-/// and is not such a name — it is where Clojure, Elixir, Ruby and much of npm
-/// keep theirs, and skipping it left `cid edit` silently unable to open half
-/// the files in those repositories.
+/// Every name here must be one that never holds source. `lib` is not such a
+/// name: Clojure, Elixir, Ruby and much of npm keep their source there, and
+/// skipping it hides those files from `cid edit`.
 const WALKER_SKIP: &[&str] = &[".git", "node_modules", ".clj-kondo", ".cpcache", ".venv"];
 
 /// How many discovered paths may sit between the walk and whatever is reading

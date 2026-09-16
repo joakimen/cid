@@ -39,8 +39,7 @@ jobs:
       - name: Install toolchain (pinned by rust-toolchain.toml)
         run: rustup show
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-      # Homebrew, where the Linux job downloaded three release archives by hand:
-      # the formula pulls ttyd and ffmpeg itself, and this is the same install
+      # The formula pulls ttyd and ffmpeg itself, and this is the same install
       # CLAUDE.md tells a maintainer to run before `make demo`.
       - name: Install VHS and its recorder dependencies
         run: |
