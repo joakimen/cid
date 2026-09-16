@@ -13,6 +13,7 @@
 use anyhow::{Result, bail};
 
 use crate::config::{Bindings, ShellConfig};
+use crate::term;
 
 /// What the shell does with the command an action runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -240,6 +241,114 @@ pub fn entries(table: Option<&Bindings>) -> Vec<(&str, &str)> {
         .collect()
 }
 
+/// One action, and every key and name the configuration gives it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Assignment<'a> {
+    pub action: &'static Action,
+    /// Keys bound to it, in the order the table writes them.
+    pub keys: Vec<&'a str>,
+    /// Names defined for it, in the order the table writes them.
+    pub aliases: Vec<&'a str>,
+}
+
+/// Every action there is, in catalogue order, with what the configuration
+/// assigns to each. An action nothing names is listed all the same: finding
+/// the ones that are still free is what the list is for.
+///
+/// A line naming an action cid does not define belongs to no row here;
+/// `cid config check` is where that is reported.
+pub fn assignments(config: &ShellConfig) -> Vec<Assignment<'_>> {
+    let bindings = entries(config.bindings.as_ref());
+    let aliases = entries(config.aliases.as_ref());
+    ACTIONS
+        .iter()
+        .map(|action| Assignment {
+            action,
+            keys: naming(&bindings, action.id),
+            aliases: naming(&aliases, action.id),
+        })
+        .collect()
+}
+
+/// The column headings of [`render_assignments`].
+const HEADINGS: [&str; 5] = ["action", "key", "alias", "runs", "does"];
+
+/// What an empty key or alias cell holds, so every row keeps one word per
+/// column for `awk` and `cut` to count.
+const NONE: &str = "-";
+
+/// `cid config actions`, one line per action under a heading row.
+///
+/// Every column but the last two is a single word; several keys or names for
+/// one action are joined by commas.
+pub fn render_assignments(assignments: &[Assignment], color: bool) -> Vec<String> {
+    let cells: Vec<[String; 5]> = assignments
+        .iter()
+        .map(|assignment| {
+            [
+                assignment.action.id.to_string(),
+                joined(&assignment.keys),
+                joined(&assignment.aliases),
+                format!("cid {}", assignment.action.args.join(" ")),
+                assignment.action.description.to_string(),
+            ]
+        })
+        .collect();
+    let width = |column: usize| {
+        cells
+            .iter()
+            .map(|row| row[column].chars().count())
+            .chain([HEADINGS[column].len()])
+            .max()
+            .unwrap_or(0)
+    };
+    let widths = [width(0), width(1), width(2), width(3)];
+
+    let heading = HEADINGS
+        .iter()
+        .enumerate()
+        .map(|(column, text)| match widths.get(column) {
+            Some(&width) => term::bold(&pad(text, width), color),
+            None => term::bold(text, color),
+        })
+        .collect::<Vec<_>>()
+        .join("  ");
+
+    let rows = cells.iter().map(|[id, keys, aliases, runs, does]| {
+        [
+            pad(id, widths[0]),
+            pad(keys, widths[1]),
+            pad(aliases, widths[2]),
+            term::paint(&pad(runs, widths[3]), term::SECONDARY, color),
+            does.clone(),
+        ]
+        .join("  ")
+    });
+
+    std::iter::once(heading).chain(rows).collect()
+}
+
+/// The triggers in `table` that name `id`.
+fn naming<'a>(table: &[(&'a str, &str)], id: &str) -> Vec<&'a str> {
+    table
+        .iter()
+        .filter(|(_, named)| *named == id)
+        .map(|(trigger, _)| *trigger)
+        .collect()
+}
+
+fn joined(triggers: &[&str]) -> String {
+    if triggers.is_empty() {
+        NONE.to_string()
+    } else {
+        triggers.join(",")
+    }
+}
+
+fn pad(text: &str, width: usize) -> String {
+    format!("{text:<width$}")
+}
+
 fn bind(what: &str, table: Option<&Bindings>) -> Result<Vec<Bound>> {
     entries(table)
         .into_iter()
@@ -365,6 +474,89 @@ mod tests {
             actions.iter().map(|action| action.id).collect::<Vec<_>>(),
             vec!["repo-cd", "edit"]
         );
+    }
+
+    /// The list is for finding what is still free, so an action nothing names
+    /// is as much a row as one that is bound.
+    #[test]
+    fn every_action_is_listed_whether_or_not_anything_names_it() {
+        let config = ShellConfig::default();
+        let listed = assignments(&config);
+
+        assert_eq!(
+            listed.iter().map(|row| row.action.id).collect::<Vec<_>>(),
+            ACTIONS.iter().map(|action| action.id).collect::<Vec<_>>()
+        );
+        assert!(
+            listed
+                .iter()
+                .all(|row| row.keys.is_empty() && row.aliases.is_empty()),
+            "{listed:?}"
+        );
+    }
+
+    #[test]
+    fn keys_and_aliases_land_on_the_action_they_name_in_the_order_written() {
+        let config = ShellConfig {
+            bindings: Some(table(&[
+                ("f8", "repo-cd"),
+                ("f1", "pr-open"),
+                ("ctrl-o", "repo-cd"),
+            ])),
+            aliases: Some(table(&[("kl", "proc-kill")])),
+        };
+        let listed = assignments(&config);
+        let row = |id: &str| listed.iter().find(|row| row.action.id == id).unwrap();
+
+        assert_eq!(row("repo-cd").keys, vec!["f8", "ctrl-o"]);
+        assert_eq!(row("pr-open").keys, vec!["f1"]);
+        assert_eq!(row("proc-kill").aliases, vec!["kl"]);
+        assert!(row("proc-kill").keys.is_empty());
+    }
+
+    /// Reporting a line that names nothing is `config check`'s job; here it
+    /// would be a row for an action that does not exist.
+    #[test]
+    fn a_line_naming_no_action_adds_no_row() {
+        let config = ShellConfig {
+            bindings: Some(table(&[("ctrl-o", "repo-jump")])),
+            ..ShellConfig::default()
+        };
+        let listed = assignments(&config);
+
+        assert_eq!(listed.len(), ACTIONS.len());
+        assert!(listed.iter().all(|row| row.keys.is_empty()), "{listed:?}");
+    }
+
+    #[test]
+    fn a_rendered_row_keeps_one_word_per_column_up_to_the_command() {
+        let config = ShellConfig {
+            bindings: Some(table(&[("ctrl-o", "repo-cd"), ("f6", "repo-cd")])),
+            aliases: Some(table(&[("kl", "proc-kill")])),
+        };
+        let lines = render_assignments(&assignments(&config), false);
+        let words = |prefix: &str| -> Vec<String> {
+            let line = lines.iter().find(|line| line.starts_with(prefix)).unwrap();
+            line.split_whitespace().map(str::to_string).collect()
+        };
+
+        assert_eq!(lines.len(), ACTIONS.len() + 1);
+        assert_eq!(
+            lines[0].split_whitespace().collect::<Vec<_>>(),
+            vec!["action", "key", "alias", "runs", "does"]
+        );
+        assert_eq!(
+            words("repo-cd ")[..5],
+            ["repo-cd", "ctrl-o,f6", "-", "cid", "repo"]
+        );
+        assert_eq!(words("proc-kill ")[..4], ["proc-kill", "-", "kl", "cid"]);
+    }
+
+    #[test]
+    fn a_listing_without_colour_carries_no_escape_sequences() {
+        for line in render_assignments(&assignments(&ShellConfig::default()), false) {
+            assert!(!line.contains('\x1b'), "{line:?}");
+        }
     }
 
     #[test]

@@ -1,4 +1,5 @@
-//! `cid config` — generate, print and check the configuration file.
+//! `cid config` — generate, print and check the configuration file, and list
+//! the actions it can bind.
 //!
 //! `print` and `check` answer different questions and are kept apart on
 //! purpose. `print` is the configuration: every setting there is, what is in
@@ -106,8 +107,9 @@ ignore = ["node_modules", "target"]
 # Neither table holds shell code — each names an action cid defines, so the
 # same configuration serves fish and any shell cid later learns to write for.
 # Between them the two tables below name every action there is. `cid config
-# print` lists the keys and names you have with what each one runs, and `cid
-# config check` says whether they resolve.
+# actions` lists them all with whatever is bound to each, `cid config print`
+# lists the keys and names you have, and `cid config check` says whether they
+# resolve.
 #
 # cid binds nothing on its own. The two tables below are suggestions, and
 # stay suggestions until you uncomment one — a key is the scarcest thing a
@@ -596,6 +598,20 @@ pub fn print(ctx: &Ctx) -> Result<()> {
 
     let mut out = term::Listing::stdout();
     for line in render_report(&report(&ctx.config, &env), ctx.color()) {
+        if !out.line(&line)? {
+            return Ok(());
+        }
+    }
+    out.finish()?;
+    Ok(())
+}
+
+/// `cid config actions` — every action a key or a name can run, and what the
+/// configuration binds to each.
+pub fn actions(ctx: &Ctx) -> Result<()> {
+    let mut out = term::Listing::stdout();
+    let assignments = binding::assignments(&ctx.config.shell);
+    for line in binding::render_assignments(&assignments, ctx.color()) {
         if !out.line(&line)? {
             return Ok(());
         }
