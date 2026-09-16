@@ -29,6 +29,10 @@ raised, never by hand.
   that deletes head branches. It lists them and asks first; `--fetch` looks at
   the remotes again before deciding, and a branch a worktree has checked out
   is kept.
+- **`cid worktree rm --branch`** deletes the branch each removed tree had
+  checked out, so finishing a piece of work is one command and one question.
+  The list shown before the question names each branch and whether it has
+  landed, and the removal selector now marks every tree the same way.
 
 ### Changed
 

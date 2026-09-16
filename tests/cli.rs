@@ -1071,6 +1071,48 @@ fn worktree_rm_removes_the_tree_it_is_given() {
     );
 }
 
+#[test]
+fn worktree_rm_leaves_the_branch_unless_asked() {
+    let sandbox = Sandbox::new();
+    let (main, feat) = mk_worktree_repo(sandbox.home());
+
+    sandbox
+        .run_in(&main, &["worktree", "rm", feat.to_str().unwrap(), "--yes"])
+        .ok();
+    assert!(!feat.exists());
+    assert_eq!(local_branches(&main, sandbox.home()), vec!["feat", "main"]);
+}
+
+#[test]
+fn worktree_rm_branch_removes_the_tree_and_the_branch_it_had_checked_out() {
+    let sandbox = Sandbox::new();
+    let main = mk_repo_with_a_gone_branch(sandbox.home());
+    let tree = sandbox.home().join("done-tree");
+    git_in(
+        &main,
+        sandbox.home(),
+        &["worktree", "add", "-q", "../done-tree", "done"],
+    );
+
+    let run = sandbox.run_in(
+        &main,
+        &[
+            "worktree",
+            "rm",
+            tree.to_str().unwrap(),
+            "--branch",
+            "--yes",
+        ],
+    );
+    run.ok();
+    let listed = run.stdout.find("done  upstream gone").expect(&run.stdout);
+    let deleted = run.stdout.find("Deleted done").expect(&run.stdout);
+    assert!(listed < deleted, "deleted before listing: {}", run.stdout);
+
+    assert!(!tree.exists(), "the tree survived: {}", run.stderr);
+    assert_eq!(local_branches(&main, sandbox.home()), vec!["main", "spike"]);
+}
+
 /// The question cannot be asked without a terminal, and a removal is not the
 /// kind of thing to answer on the user's behalf.
 #[test]

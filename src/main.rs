@@ -615,8 +615,14 @@ enum WorktreeCmd {
     /// Remove worktrees; omit the paths to select them
     ///
     /// `tab` selects several. Neither the main tree nor the one you are
-    /// standing in is offered — git will not remove either. The branches they
-    /// had checked out are left alone; that is `cid branch rm`.
+    /// standing in is offered — git will not remove either. Each row says
+    /// whether its branch has landed: `merged`, `upstream gone` once its
+    /// remote branch was deleted, or `not merged`.
+    ///
+    /// The branches they had checked out are left alone unless `--branch`
+    /// asks for them too, which is how a finished piece of work goes in one
+    /// step. Those are listed with the trees before the question is put, and
+    /// deleted even where git cannot see they have landed.
     Rm {
         /// Worktrees to remove, by path; omit to select interactively
         #[arg(value_name = "PATH")]
@@ -624,6 +630,9 @@ enum WorktreeCmd {
         /// Remove a tree with uncommitted changes in it
         #[arg(short, long)]
         force: bool,
+        /// Delete the branch each tree had checked out, too
+        #[arg(short, long)]
+        branch: bool,
         /// Remove without asking
         #[arg(short, long)]
         yes: bool,
@@ -1069,7 +1078,12 @@ fn dispatch(ctx: &Ctx, command: Command) -> anyhow::Result<()> {
             } => cmd::worktree::ls(ctx, absolute_paths, status),
             WorktreeCmd::Sel => cmd::worktree::sel(ctx),
             WorktreeCmd::Add { branch } => cmd::worktree::add(ctx, branch.as_deref()),
-            WorktreeCmd::Rm { paths, force, yes } => cmd::worktree::remove(ctx, &paths, force, yes),
+            WorktreeCmd::Rm {
+                paths,
+                force,
+                branch,
+                yes,
+            } => cmd::worktree::remove(ctx, &paths, force, branch, yes),
         },
         Command::Pr { command } => match command {
             PrCmd::Ls { status, scope } => cmd::pr::ls(ctx, &scope.state, scope.limit, status),
