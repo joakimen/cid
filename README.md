@@ -15,7 +15,7 @@ selection: `ls` prints, `sel` picks one, and the rest act. `sel` writes to
 stdout and composes — `cd (cid repo sel)`. The finder is linked into the
 binary, so there is no `fzf` subprocess.
 
-![cid: check out a remote branch, find and open a file, list pull requests](docs/demo.gif)
+![cid: jump to a repository, check out a remote branch and a pull request, search notes by content, open a file](docs/demo.gif)
 
 ## Install
 

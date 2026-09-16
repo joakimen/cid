@@ -112,6 +112,14 @@ git -C "$API" branch -q -D feat/token-bucket
 git -C "$API" checkout -q -b spike/redis-cache
 commit "$API" $((2 * HOUR)) 'spike: try redis cache'
 
+# Pushed by someone else and never fetched here: `pr checkout` fetches it.
+git -C "$API" checkout -q -b fix/round-usage main
+commit "$API" $((30 * HOUR)) 'fix: round partial usage up'
+git -C "$API" push -q -u origin fix/round-usage
+git -C "$API" checkout -q main
+git -C "$API" branch -q -D fix/round-usage
+git -C "$API" branch -q -d -r origin/fix/round-usage
+
 # Pushed and kept: local and remote (green).
 git -C "$API" checkout -q -b fix/off-by-one
 commit "$API" $HOUR 'fix: off-by-one window'
@@ -143,19 +151,62 @@ display = "relative"
 # Labels name owners, so the selector colours acme's repos as work.
 labels = { work = ["acme"], personal = ["personal"] }
 
+[note]
+root = "~/notes"
+labels = { work = ["work"], personal = ["journal"] }
+
 [selector]
 height = "100%"
 preview = true
 preview_window = "right:38%"
 EOF
 
-# The known-files list, with files that exist so previews have something to show.
+# The notes vault, which `note open` searches. standup.md is on the known-files
+# list below too, so its preview has something to show.
+mkdir -p "$FIX/notes/work" "$FIX/notes/journal"
 cat > "$FIX/notes/standup.md" <<'EOF'
+---
+title: Standup
+tags: [billing]
+---
 # Standup
 
 - rate limiting: token bucket landed behind a flag
 - next: decide redis vs in-process for the quota cache
 EOF
+cat > "$FIX/notes/work/quota-cache.md" <<'EOF'
+---
+title: Where quotas are cached
+tags: [billing, design]
+---
+# Where quotas are cached
+
+In-process wins for now: a redis round trip costs more than recomputing the
+bucket, and one instance holds every key we meter today.
+
+- [ ] revisit once a second instance runs
+EOF
+cat > "$FIX/notes/work/invoice-runbook.md" <<'EOF'
+---
+title: Invoice runbook
+tags: [billing, ops]
+---
+# Invoice runbook
+
+1. Freeze the meter window.
+2. Re-run the rollup if any key shows zero units.
+EOF
+cat > "$FIX/notes/journal/reading.md" <<'EOF'
+---
+title: Reading list
+tags: [books]
+---
+# Reading list
+
+- The Name of the Wind
+EOF
+
+# The known-files list.
 cat > "$FIX/.config/cid/files" <<'EOF'
 ~/.config/cid/config.toml
 ~/notes/standup.md
@@ -207,6 +258,7 @@ fi
 if [ "$1" = "pr" ] && [ "$2" = "checkout" ]; then
     case $3 in
         128) branch=feat/token-bucket ;;
+        127) branch=fix/round-usage ;;
         *) echo "demo stub: no branch for pull request $3" >&2; exit 1 ;;
     esac
     git fetch -q origin "$branch" 2>/dev/null || true
@@ -249,8 +301,8 @@ export PATH='$FIX/bin':'$CID_BIN_DIR':"\$PATH"
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
 # cat rather than a real editor: a recording cannot drive one deterministically.
 export EDITOR=cat
-export PS1='❯ '
-cd '$API'
+export PS1='\\W ❯ '
+cd '$FIX'
 clear
 EOF
 

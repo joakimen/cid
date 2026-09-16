@@ -12,7 +12,7 @@ Set Width 1200
 Set Height 280
 Set Padding 20
 Set Theme "Catppuccin Mocha"
-Set TypingSpeed 45ms
+Set TypingSpeed 25ms
 Set Framerate 24
 
 # Enter the sandbox off-camera: fake HOME, stub gh, freshly built cid.
@@ -22,37 +22,57 @@ Enter
 Sleep 1s
 Show
 
-# --- 1. Check out a branch that only exists on the remote --------------------
-Type "cid branch checkout"
-Sleep 350ms
+# --- 1. Jump to a repository -------------------------------------------------
+# The prompt names the directory, so the cd shows.
+Type 'cd "$(cid repo sel)"'
 Enter
-Sleep 1200ms
+Sleep 700ms
+Type "bill"
+Sleep 800ms
+Enter
+Sleep 900ms
+
+# --- 2. Check out a branch that only exists on the remote --------------------
+Type "cid branch checkout"
+Enter
+Sleep 800ms
 
 # Three rows down is the remote-only branch, at the bottom of the list.
 Down
-Sleep 500ms
+Sleep 250ms
 Down
-Sleep 500ms
+Sleep 250ms
 Down
-Sleep 1200ms
-
+Sleep 700ms
 Enter
-Sleep 2s
+Sleep 1300ms
 
-# --- 2. Find a file where you are standing and open it -----------------------
-# $EDITOR is cat in the sandbox, so the file lands on screen.
-Type "cid edit"
-Sleep 350ms
+# --- 3. Check out a pull request, reading its checks and body first ----------
+Type "cid pr checkout"
 Enter
-Sleep 1200ms
+Sleep 1600ms
+Down
+Sleep 1600ms
+Enter
+Sleep 1300ms
 
-Type "quota"
+# --- 4. Find a note by what it says ------------------------------------------
+# ctrl-r switches the query from note names to the text inside them.
+# $EDITOR is cat in the sandbox, so the note lands on screen.
+Type "cid note open"
+Enter
+Sleep 600ms
+Ctrl+R
+Type "redis"
 Sleep 1500ms
 Enter
-Sleep 2s
+Sleep 1800ms
 
-# --- 3. Pull requests, with their checks -------------------------------------
-Type "cid pr ls --status"
-Sleep 350ms
+# --- 5. Find a file where you are standing and open it -----------------------
+Type "cid edit"
 Enter
-Sleep 3s
+Sleep 600ms
+Type "quota"
+Sleep 1000ms
+Enter
+Sleep 1800ms
