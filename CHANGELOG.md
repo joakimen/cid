@@ -13,6 +13,10 @@ raised, never by hand.
 
 ## Unreleased
 
+## v0.21.0
+
+*Released 2026-09-16*
+
 ### Added
 
 - **`cid config actions`** lists every action `[shell.bindings]` and
