@@ -1166,6 +1166,150 @@ fn branch_rm_without_a_terminal_names_the_flag_that_skips_the_question() {
     assert!(left.contains("keep"), "the branch went unconfirmed: {left}");
 }
 
+/// A clone of a bare `remote.git` holding `main`, `done` — pushed, then
+/// deleted on the remote, the way merging its pull request deletes it — and
+/// `spike`, which was never pushed. `done` is deleted through the clone, so
+/// its remote-tracking ref is already gone and no fetch is needed to see it.
+fn mk_repo_with_a_gone_branch(root: &Path) -> PathBuf {
+    let home = root;
+    git_in(
+        root,
+        home,
+        &["init", "-q", "--bare", "-b", "main", "remote.git"],
+    );
+    let main = root.join("cid");
+    std::fs::create_dir_all(&main).unwrap();
+    for args in [
+        &["init", "-q", "-b", "main"][..],
+        &["commit", "-q", "--allow-empty", "-m", "init"][..],
+        &["remote", "add", "origin", "../remote.git"][..],
+        &["push", "-q", "-u", "origin", "main"][..],
+        &["checkout", "-q", "-b", "done"][..],
+        &["commit", "-q", "--allow-empty", "-m", "finished work"][..],
+        &["push", "-q", "-u", "origin", "done"][..],
+        &["checkout", "-q", "-b", "spike", "main"][..],
+        &["commit", "-q", "--allow-empty", "-m", "never pushed"][..],
+        &["checkout", "-q", "main"][..],
+        &["push", "-q", "origin", "--delete", "done"][..],
+    ] {
+        git_in(&main, root, args);
+    }
+    main
+}
+
+fn local_branches(repo: &Path, home: &Path) -> Vec<String> {
+    git_in(repo, home, &["branch", "--format=%(refname:short)"])
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+#[test]
+fn branch_ls_status_tags_a_branch_whose_remote_branch_is_gone() {
+    let sandbox = Sandbox::new();
+    let main = mk_repo_with_a_gone_branch(sandbox.home());
+
+    let run = sandbox.run_in(&main, &["branch", "ls", "--status"]);
+    run.ok();
+    let row = |name: &str| {
+        run.lines()
+            .into_iter()
+            .find(|line| line.split_whitespace().next() == Some(name))
+            .unwrap_or_else(|| panic!("no row for {name}: {}", run.stdout))
+            .to_string()
+    };
+    assert!(row("done").contains(" gone "), "{}", row("done"));
+    assert!(row("spike").contains(" local "), "{}", row("spike"));
+
+    let remote = sandbox.run_in(&main, &["branch", "ls", "--remote"]);
+    remote.ok();
+    assert!(!remote.lines().contains(&"done"), "{}", remote.stdout);
+}
+
+#[test]
+fn branch_prune_deletes_the_gone_branches_and_nothing_else() {
+    let sandbox = Sandbox::new();
+    let main = mk_repo_with_a_gone_branch(sandbox.home());
+
+    let run = sandbox.run_in(&main, &["branch", "prune", "--yes"]);
+    run.ok();
+    let listed = run.stdout.find("done  upstream gone").expect(&run.stdout);
+    let deleted = run.stdout.find("Deleted done").expect(&run.stdout);
+    assert!(listed < deleted, "deleted before listing: {}", run.stdout);
+
+    assert_eq!(local_branches(&main, sandbox.home()), vec!["main", "spike"]);
+}
+
+/// A branch is only seen to be gone once a fetch has pruned its tracking ref,
+/// which is what `--fetch` is for when it was deleted from somewhere else.
+#[test]
+fn branch_prune_fetch_sees_a_branch_deleted_elsewhere() {
+    let sandbox = Sandbox::new();
+    let main = mk_repo_with_a_gone_branch(sandbox.home());
+    git_in(
+        &main,
+        sandbox.home(),
+        &["push", "-q", "-u", "origin", "spike"],
+    );
+    git_in(
+        &sandbox.home().join("remote.git"),
+        sandbox.home(),
+        &["branch", "-D", "spike"],
+    );
+
+    let before = sandbox.run_in(&main, &["branch", "prune", "--yes"]);
+    before.ok();
+    assert!(
+        local_branches(&main, sandbox.home()).contains(&"spike".to_string()),
+        "pruned without having fetched: {}",
+        before.stdout
+    );
+
+    sandbox
+        .run_in(&main, &["branch", "prune", "--fetch", "--yes"])
+        .ok();
+    assert_eq!(local_branches(&main, sandbox.home()), vec!["main"]);
+}
+
+#[test]
+fn branch_prune_keeps_a_branch_a_worktree_has_checked_out() {
+    let sandbox = Sandbox::new();
+    let main = mk_repo_with_a_gone_branch(sandbox.home());
+    git_in(
+        &main,
+        sandbox.home(),
+        &["worktree", "add", "-q", "../done-tree", "done"],
+    );
+
+    let run = sandbox.run_in(&main, &["branch", "prune", "--yes"]);
+    run.ok();
+    assert!(run.stderr.contains("keeping done"), "{}", run.stderr);
+    assert!(run.stdout.contains("Nothing to prune"), "{}", run.stdout);
+    assert!(local_branches(&main, sandbox.home()).contains(&"done".to_string()));
+}
+
+#[test]
+fn branch_prune_without_a_terminal_names_the_flag_that_skips_the_question() {
+    let sandbox = Sandbox::new();
+    let main = mk_repo_with_a_gone_branch(sandbox.home());
+
+    let run = sandbox.run_in(&main, &["branch", "prune"]);
+    run.code(1);
+    assert!(run.stderr.contains("--yes"), "{}", run.stderr);
+    assert!(local_branches(&main, sandbox.home()).contains(&"done".to_string()));
+}
+
+#[test]
+fn branch_prune_with_nothing_gone_points_at_fetch() {
+    let sandbox = Sandbox::new();
+    let (main, _) = mk_worktree_repo(sandbox.home());
+
+    let run = sandbox.run_in(&main, &["branch", "prune"]);
+    run.ok();
+    assert!(run.stdout.contains("Nothing to prune"), "{}", run.stdout);
+    assert!(run.stdout.contains("--fetch"), "{}", run.stdout);
+}
+
 // --- the known-files list ---------------------------------------------------
 
 #[test]

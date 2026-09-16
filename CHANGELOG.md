@@ -24,6 +24,18 @@ raised, never by hand.
   selector. macOS claims Control-F7 for "Change the way Tab moves focus" by
   default: turn that off under System Settings → Keyboard → Keyboard Shortcuts
   → Keyboard before binding it.
+- **`cid branch prune`** deletes every local branch whose remote branch has
+  been deleted — which is what merging a pull request does on a repository
+  that deletes head branches. It lists them and asks first; `--fetch` looks at
+  the remotes again before deciding, and a branch a worktree has checked out
+  is kept.
+
+### Changed
+
+- A branch whose remote branch is gone is no longer shown as `local`, as if it
+  had never been pushed. `cid branch ls --status` tags it `gone` and tints it
+  blue, and `cid branch rm` marks it `upstream gone` rather than `not merged`
+  — the mark every squash-merged branch used to carry.
 
 ## v0.21.0
 

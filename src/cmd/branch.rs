@@ -1,4 +1,4 @@
-//! `cid branch` — list, select, and check out git branches.
+//! `cid branch` — list, select, check out and delete git branches.
 //!
 //! Local and remote branches are shown in one list, coloured by where they
 //! live. Selecting a remote-only branch creates the local branch and sets its
@@ -13,7 +13,8 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Result, bail};
 
-use crate::git::{self, Branch, BranchKind, Filter};
+use crate::git::{self, Branch, BranchKind, Filter, Worktree};
+use crate::path::display_path;
 use crate::select::{Preview, SelectItem};
 use crate::term;
 use crate::{Ctx, select};
@@ -235,35 +236,71 @@ fn deletable(branches: &[Branch]) -> Vec<&Branch> {
         .collect()
 }
 
-/// The mark a branch carries in the list of what is about to be deleted, and in
-/// the selector: whether git considers its commits to have landed.
-///
-/// A squash merge leaves no trace git can follow — the branch's commits never
-/// become ancestors of the commit that merged them — so `not merged` is
-/// routinely true of work that is finished. It is a fact, not a warning, which
-/// is why it is shown rather than obeyed.
-fn merge_mark(merged: bool) -> &'static str {
-    if merged { "merged" } else { "not merged" }
+/// Whether a branch's work has landed, as far as this clone can tell without
+/// asking GitHub. Shown beside every branch about to be deleted, and in the
+/// deletion selector.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Landed {
+    /// Its commits are in HEAD, so git deletes it without being forced.
+    Merged,
+    /// The remote branch it tracked was deleted. A squash merge leaves nothing
+    /// else behind to see, so this is how finished work usually looks.
+    Gone,
+    /// Neither. A fact, not a warning: squash-merged work whose remote branch
+    /// was kept looks exactly like this.
+    Unmerged,
 }
 
-/// Selector rows for deletion: the branch, when it was last committed to, and
-/// whether it has landed. Tinted green where git can see it has.
+impl Landed {
+    /// What is known about `name`, which may not be a branch at all when it
+    /// was typed on the command line — git then says so when deleting it.
+    fn of(name: &str, branches: &[Branch], merged: &HashSet<String>) -> Self {
+        if merged.contains(name) {
+            return Self::Merged;
+        }
+        match branches.iter().find(|branch| branch.name == name) {
+            Some(branch) if branch.kind == BranchKind::Gone => Self::Gone,
+            _ => Self::Unmerged,
+        }
+    }
+
+    fn mark(self) -> &'static str {
+        match self {
+            Self::Merged => "merged",
+            Self::Gone => "upstream gone",
+            Self::Unmerged => "not merged",
+        }
+    }
+
+    fn color(self) -> u8 {
+        match self {
+            Self::Merged => 2,
+            Self::Gone => BranchKind::Gone.color(),
+            Self::Unmerged => 3,
+        }
+    }
+}
+
+/// The widest [`Landed::mark`], so the column after it lines up.
+const MARK_WIDTH: usize = "upstream gone".len();
+
+/// Selector rows for deletion: the branch, whether it has landed, when it was
+/// last committed to and what it last carried.
 fn rm_items(branches: &[Branch], merged: &HashSet<String>) -> Vec<SelectItem> {
     let width = name_width(branches);
-    let mark_width = "not merged".len();
     branches
         .iter()
         .map(|branch| {
-            let landed = merged.contains(&branch.name);
+            let landed = Landed::of(&branch.name, branches, merged);
             let label = format!(
-                "{name:<width$}  {mark:<mark_width$}  {date}  {subject}",
+                "{name:<width$}  {mark:<MARK_WIDTH$}  {date}  {subject}",
                 name = branch.name,
-                mark = merge_mark(landed),
+                mark = landed.mark(),
                 date = branch.date,
                 subject = branch.subject,
             );
             SelectItem::new(label.trim_end(), branch.name.clone())
-                .color(if landed { 2 } else { 3 })
+                .color(landed.color())
                 .preview(preview(branch))
         })
         .collect()
@@ -297,20 +334,85 @@ pub fn rm(ctx: &Ctx, names: &[String], yes: bool) -> Result<()> {
     } else {
         names.to_vec()
     };
-    if targets.is_empty() {
+    let targets: Vec<(String, Landed)> = targets
+        .into_iter()
+        .map(|name| {
+            let landed = Landed::of(&name, &branches, &merged);
+            (name, landed)
+        })
+        .collect();
+
+    delete_confirmed(ctx, &targets, yes)
+}
+
+/// The branches `prune` deletes, and the ones it leaves because a worktree has
+/// them checked out — which git would refuse to delete anyway.
+fn prunable<'a>(
+    branches: &'a [Branch],
+    worktrees: &'a [Worktree],
+) -> (Vec<&'a Branch>, Vec<(&'a Branch, &'a Worktree)>) {
+    let mut doomed = Vec::new();
+    let mut kept = Vec::new();
+    for branch in branches.iter().filter(|b| b.kind == BranchKind::Gone) {
+        match worktrees.iter().find(|tree| tree.branch == branch.name) {
+            Some(tree) => kept.push((branch, tree)),
+            None => doomed.push(branch),
+        }
+    }
+    (doomed, kept)
+}
+
+/// `cid branch prune` — delete every local branch whose remote branch is gone.
+///
+/// No selector: the set is already decided, so the list is printed and one
+/// question asked, as `file prune` does. `--fetch` refreshes the remotes first,
+/// since a branch deleted on GitHub reads as gone here only once a fetch has
+/// pruned it.
+pub fn prune(ctx: &Ctx, fetch: bool, yes: bool) -> Result<()> {
+    let branches = load(ctx, fetch)?;
+    let here = git::require_repo_root()?;
+    let worktrees = git::worktrees(&here)?;
+    let (doomed, kept) = prunable(&branches, &worktrees);
+
+    for (branch, tree) in &kept {
+        let path = tree.path.to_string_lossy();
+        eprintln!(
+            "note: keeping {}, checked out in {}",
+            branch.name,
+            display_path(&path, ctx.home_str(), false)
+        );
+    }
+    if doomed.is_empty() {
+        let hint = if fetch {
+            ""
+        } else {
+            " — `--fetch` looks again"
+        };
+        println!("Nothing to prune — no local branch tracks a remote branch that is gone{hint}");
         return Ok(());
     }
 
-    if !confirm_deletion(ctx, &targets, &merged, yes)? {
+    let targets: Vec<(String, Landed)> = doomed
+        .iter()
+        .map(|branch| (branch.name.clone(), Landed::Gone))
+        .collect();
+    delete_confirmed(ctx, &targets, yes)
+}
+
+/// Show what is about to go and what is known about each, ask, then delete.
+fn delete_confirmed(ctx: &Ctx, targets: &[(String, Landed)], yes: bool) -> Result<()> {
+    if targets.is_empty() {
+        return Ok(());
+    }
+    if !confirm_deletion(ctx, targets, yes)? {
         return Ok(());
     }
 
     let mut failed = 0;
-    for name in &targets {
+    for (name, landed) in targets {
         // Forced for a branch git cannot see has landed: the confirmation
         // above showed that state and was answered anyway.
-        let force = !merged.contains(name);
-        match git::delete_branch(name, force) {
+        match git::delete_branch(name, *landed != Landed::Merged) {
             Ok(()) => println!("Deleted {name}"),
             Err(err) => {
                 failed += 1;
@@ -327,21 +429,19 @@ pub fn rm(ctx: &Ctx, names: &[String], yes: bool) -> Result<()> {
     Ok(())
 }
 
-/// Show what is about to go, and what git knows about each, then ask.
-fn confirm_deletion(
-    ctx: &Ctx,
-    targets: &[String],
-    merged: &HashSet<String>,
-    yes: bool,
-) -> Result<bool> {
-    let width = targets.iter().map(|n| n.chars().count()).max().unwrap_or(0);
+/// Print each target with its [`Landed`] mark, then ask.
+fn confirm_deletion(ctx: &Ctx, targets: &[(String, Landed)], yes: bool) -> Result<bool> {
+    let width = targets
+        .iter()
+        .map(|(name, _)| name.chars().count())
+        .max()
+        .unwrap_or(0);
     let color = ctx.color();
 
     let mut out = term::Listing::stdout();
-    for name in targets {
-        let landed = merged.contains(name);
-        let row = format!("{name:<width$}  {}", merge_mark(landed));
-        if !out.line(&term::paint(&row, if landed { 2 } else { 3 }, color))? {
+    for (name, landed) in targets {
+        let row = format!("{name:<width$}  {}", landed.mark());
+        if !out.line(&term::paint(&row, landed.color(), color))? {
             return Ok(false);
         }
     }
@@ -475,6 +575,67 @@ mod tests {
         let rows = rm_items(&branches, &HashSet::new());
         assert!(rows[0].label.contains("not merged"), "{}", rows[0].label);
         assert_eq!(rows[0].color, Some(3));
+    }
+
+    fn gone(name: &str) -> Branch {
+        classify(&[RefLine {
+            refname: format!("refs/heads/{name}"),
+            head: false,
+            symref: String::new(),
+            upstream: format!("origin/{name}"),
+            date: "1 day ago".into(),
+            subject: "done".into(),
+        }])
+        .remove(0)
+    }
+
+    /// A squash merge leaves nothing in HEAD to find, so a deleted remote
+    /// branch is the only sign a deletion row has of finished work.
+    #[test]
+    fn a_branch_whose_upstream_is_gone_says_so_rather_than_not_merged() {
+        let branches = vec![gone("feat")];
+        assert_eq!(Landed::of("feat", &branches, &HashSet::new()), Landed::Gone);
+
+        let label = &rm_items(&branches, &HashSet::new())[0].label;
+        assert!(label.contains("upstream gone"), "{label}");
+        assert!(!label.contains("not merged"), "{label}");
+    }
+
+    #[test]
+    fn merged_outranks_gone() {
+        let merged: HashSet<String> = ["feat".to_string()].into_iter().collect();
+        assert_eq!(Landed::of("feat", &[gone("feat")], &merged), Landed::Merged);
+    }
+
+    #[test]
+    fn a_name_that_is_no_branch_is_not_claimed_to_have_landed() {
+        assert_eq!(
+            Landed::of("typo", &[gone("feat")], &HashSet::new()),
+            Landed::Unmerged
+        );
+    }
+
+    #[test]
+    fn prune_takes_only_gone_branches_and_keeps_the_ones_a_tree_has_checked_out() {
+        let mut branches = branches();
+        branches.extend([gone("done"), gone("in-review")]);
+        let trees = vec![Worktree {
+            path: "/dev/cid/.worktrees/in-review".into(),
+            branch: "in-review".into(),
+            ..Worktree::default()
+        }];
+
+        let (doomed, kept) = prunable(&branches, &trees);
+        assert_eq!(
+            doomed.iter().map(|b| b.name.as_str()).collect::<Vec<_>>(),
+            vec!["done"]
+        );
+        assert_eq!(
+            kept.iter()
+                .map(|(b, _)| b.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["in-review"]
+        );
     }
 
     #[test]
