@@ -171,3 +171,25 @@ pub(crate) fn launch(ctx: &Ctx, editor: &[String], targets: &[String]) -> Result
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_selection_passes_through() {
+        let selected = vec!["a.rs".to_string(), "b.rs".to_string()];
+        assert_eq!(cancellable(Ok(selected.clone())).unwrap(), Some(selected));
+    }
+
+    #[test]
+    fn a_cancelled_selector_is_nothing_to_open_rather_than_an_error() {
+        assert_eq!(cancellable(Err(select::Cancelled.into())).unwrap(), None);
+    }
+
+    #[test]
+    fn any_other_error_is_left_alone() {
+        let err = cancellable(Err(anyhow!("walk failed"))).unwrap_err();
+        assert_eq!(err.to_string(), "walk failed");
+    }
+}
