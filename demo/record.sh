@@ -1,7 +1,7 @@
 #!/bin/sh
 # Render the README demo with VHS: build cid, generate the sandbox the tape
-# runs against, play the tape. `--check` renders to a throwaway path instead,
-# which is what CI runs.
+# runs against, play the tape. `--check` renders a dev build to a throwaway
+# path instead, which is what CI runs.
 #
 # Usage: demo/record.sh [--check]
 set -eu
@@ -19,8 +19,15 @@ fi
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$ROOT"
 
-cargo build --release
-CID_BIN_DIR=$ROOT/target/release
+# A check only proves the tape plays, which a dev build does in half the
+# compile time; the recording a reader sees is made with the release binary.
+if [ "$CHECK" = true ]; then
+    cargo build
+    CID_BIN_DIR=$ROOT/target/debug
+else
+    cargo build --release
+    CID_BIN_DIR=$ROOT/target/release
+fi
 export CID_BIN_DIR
 
 sh demo/fixture.sh target/demo-fixture

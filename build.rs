@@ -2,6 +2,7 @@
 //! is a release — on a tag, nothing modified — and a development build naming
 //! its commit otherwise. Git is not required.
 
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 /// The paths whose contents decide what the binary *is*: the re-run triggers
@@ -15,8 +16,16 @@ fn main() {
     for path in SOURCES {
         println!("cargo:rerun-if-changed={path}");
     }
-    for path in [".git/HEAD", ".git/index", ".git/refs"] {
-        println!("cargo:rerun-if-changed={path}");
+    // Asked of git rather than spelled `.git/HEAD`: in a worktree `.git` is a
+    // file, and cargo reruns this script on every build for a watched path that
+    // does not exist. The index is left out: `git status` rewrites it, and
+    // whether a source is dirty already turns on the sources and HEAD.
+    for path in ["HEAD", "refs", "packed-refs"] {
+        if let Some(resolved) = git(&["rev-parse", "--path-format=absolute", "--git-path", path])
+            && Path::new(&resolved).exists()
+        {
+            println!("cargo:rerun-if-changed={resolved}");
+        }
     }
     println!("cargo:rerun-if-env-changed=CID_RELEASE");
 
