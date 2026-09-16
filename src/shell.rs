@@ -406,7 +406,9 @@ mod tests {
     #[test]
     fn bindings_that_produce_output_run_through_the_command_line() {
         let out = examples();
-        for key in ["ctrl-o", "ctrl-t", "f1", "f2", "f3", "ctrl-g", "f7", "f10"] {
+        for key in [
+            "ctrl-o", "ctrl-t", "f1", "f2", "f3", "ctrl-g", "f7", "ctrl-f7", "f10",
+        ] {
             let bind = binding_for(&out, key);
             assert!(
                 bind.contains("cid-run-as-command"),

@@ -214,34 +214,48 @@ pub fn add(ctx: &Ctx, branch: Option<&str>) -> Result<()> {
     let source = git::tree_source(&branches, &input);
     ctx.log.info(&format!("tree source: {source:?}"));
 
+    let path = new_tree_path(ctx, &repo_root, source.branch())?;
+    git::add_worktree(&path, &source)?;
+    exclude_root(ctx, &repo_root);
+
+    println!("{}", path.display());
+    Ok(())
+}
+
+/// Where a new tree for `branch` goes under `[worktree] root`, refusing a path
+/// that is already there. Shared with `pr checkout --worktree`, so a tree
+/// reaches the same place whichever command made it.
+pub(crate) fn new_tree_path(ctx: &Ctx, repo_root: &Path, branch: &str) -> Result<PathBuf> {
     let root = expand_home_dir(&ctx.config.worktree.root, ctx.home());
-    let path = tree_path(&repo_root, &root, source.branch());
+    let path = tree_path(repo_root, &root, branch);
     if path.exists() {
         bail!(
             "{} already exists — `cid worktree sel` will take you there",
             path.display()
         );
     }
+    Ok(path)
+}
 
-    git::add_worktree(&path, &source)?;
-
-    // Only for a root inside the repository: an absolute one is nobody's
-    // working copy and there is nothing to hide from `git status`.
-    if !root.is_absolute() {
-        match git::ignore_locally(&repo_root, &ctx.config.worktree.root) {
-            Ok(true) => eprintln!(
-                "note: added `{}/` to this clone's .git/info/exclude",
-                ctx.config.worktree.root
-            ),
-            Ok(false) => {}
-            Err(err) => ctx
-                .log
-                .warn(&format!("could not write info/exclude: {err:#}")),
-        }
+/// Hide a `[worktree] root` inside the repository from the repository itself,
+/// once a tree has been made there.
+///
+/// Only for a relative root: an absolute one is nobody's working copy and there
+/// is nothing to hide from `git status`.
+pub(crate) fn exclude_root(ctx: &Ctx, repo_root: &Path) {
+    if expand_home_dir(&ctx.config.worktree.root, ctx.home()).is_absolute() {
+        return;
     }
-
-    println!("{}", path.display());
-    Ok(())
+    match git::ignore_locally(repo_root, &ctx.config.worktree.root) {
+        Ok(true) => eprintln!(
+            "note: added `{}/` to this clone's .git/info/exclude",
+            ctx.config.worktree.root
+        ),
+        Ok(false) => {}
+        Err(err) => ctx
+            .log
+            .warn(&format!("could not write info/exclude: {err:#}")),
+    }
 }
 
 // --- rm ---------------------------------------------------------------------

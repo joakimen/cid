@@ -750,6 +750,14 @@ pub fn add_worktree(path: &Path, source: &TreeSource) -> Result<()> {
     }
 }
 
+/// Create a working tree at `path` with nothing checked out but the current
+/// commit, for a caller that puts a branch in it afterwards. Narrates onto
+/// stderr, as [`add_worktree`] does.
+pub fn add_detached_worktree(path: &Path) -> Result<()> {
+    let path = path.to_string_lossy();
+    passthrough_onto_stderr(&["worktree", "add", "--detach", &path])
+}
+
 /// Whether git already ignores `path`, by any of the rules it consults.
 fn is_ignored(path: &Path) -> bool {
     let _child = stats::in_child();

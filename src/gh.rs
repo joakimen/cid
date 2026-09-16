@@ -486,6 +486,49 @@ pub fn checkout(number: u64) -> Result<()> {
     run(&["pr", "checkout", &number.to_string()])
 }
 
+/// Check out a pull request's branch in the tree at `dir`, as [`checkout`]
+/// does in the current one.
+///
+/// `gh` narrates the checkout on stdout, which is where the caller prints the
+/// tree's path for a shell to `cd` into, so it is handed stderr in its place.
+pub fn checkout_in(dir: &Path, number: u64) -> Result<()> {
+    use std::os::fd::AsFd;
+
+    let stderr = std::io::stderr()
+        .as_fd()
+        .try_clone_to_owned()
+        .context("duplicating stderr")?;
+    let _child = stats::in_child();
+    let status = Command::new("gh")
+        .args(["pr", "checkout", &number.to_string()])
+        .current_dir(dir)
+        .stdout(Stdio::from(stderr))
+        .status()
+        .map_err(spawn_error)?;
+    if !status.success() {
+        return Err(Reported(status.code().unwrap_or(1)).into());
+    }
+    Ok(())
+}
+
+/// The branch a pull request was opened from, as GitHub names it.
+pub fn head_branch(number: u64) -> Result<String> {
+    let out = capture(&[
+        "pr",
+        "view",
+        &number.to_string(),
+        "--json",
+        "headRefName",
+        "--jq",
+        ".headRefName",
+    ])?;
+    let branch = term::one_row(out.trim());
+    if branch.is_empty() {
+        bail!("gh named no branch for pull request #{number}");
+    }
+    Ok(branch)
+}
+
 /// Open a pull request in the browser. `gh` already knows the host, so GitHub
 /// Enterprise works, and defers to `$BROWSER`.
 ///

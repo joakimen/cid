@@ -125,6 +125,7 @@ ignore = ["node_modules", "target"]
 # f3     = "file-edit"        # open a tracked file in $EDITOR
 # ctrl-g = "branch-checkout"  # check out a branch
 # f7     = "pr-checkout"      # check out a pull request
+# ctrl-f7 = "pr-worktree-cd"  # the same, in a worktree of its own, and cd there
 # f10    = "note-edit"        # open a note from the vault
 # ctrl-r = "history-select"   # search history onto the command line
 # up     = "history-up"       # the same, on the first line of a prompt
@@ -1641,7 +1642,7 @@ mod tests {
 
         let sound = shell_check(&sound_config);
         assert_eq!(sound.status, Status::Ok);
-        assert!(sound.detail.contains("10 key bindings"), "{}", sound.detail);
+        assert!(sound.detail.contains("11 key bindings"), "{}", sound.detail);
 
         // Nothing written is nothing bound, and that is a sound state.
         let empty = shell_check(&Config::default());

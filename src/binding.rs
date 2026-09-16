@@ -100,6 +100,12 @@ pub const ACTIONS: &[Action] = &[
         args: &["pr", "checkout"],
         kind: Kind::Run,
     },
+    Action {
+        id: "pr-worktree-cd",
+        description: "Select a pull request, check it out in a new worktree and cd there",
+        args: &["pr", "checkout", "--worktree"],
+        kind: Kind::Cd,
+    },
     // The one pull request action that asks nothing: whatever this branch is,
     // it either has a pull request or it does not, and both are a page.
     Action {
@@ -155,7 +161,10 @@ pub const ACTIONS: &[Action] = &[
 /// `transpose-chars` — swapping the two characters around the cursor — and up
 /// `up-line`, which `history-up` hands back wherever the selector would be
 /// wrong. f1, f2, f3, f7 and f10 displace nothing; f4 and f5 are left alone
-/// because users' own tools cluster there.
+/// because users' own tools cluster there. ctrl-f7 displaces nothing in fish,
+/// but macOS takes Control-F7 for "Change the way Tab moves focus" until that
+/// shortcut is turned off under System Settings → Keyboard → Keyboard
+/// Shortcuts → Keyboard.
 pub const EXAMPLE_BINDINGS: &[(&str, &str)] = &[
     ("ctrl-o", "repo-cd"),
     ("ctrl-t", "worktree-cd"),
@@ -164,6 +173,7 @@ pub const EXAMPLE_BINDINGS: &[(&str, &str)] = &[
     ("f3", "file-edit"),
     ("ctrl-g", "branch-checkout"),
     ("f7", "pr-checkout"),
+    ("ctrl-f7", "pr-worktree-cd"),
     ("f10", "note-edit"),
     ("ctrl-r", "history-select"),
     ("up", "history-up"),

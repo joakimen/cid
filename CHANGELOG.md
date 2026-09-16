@@ -13,6 +13,18 @@ raised, never by hand.
 
 ## Unreleased
 
+### Added
+
+- **`cid pr checkout --worktree`** (`-w`) checks a pull request out in a
+  worktree of its own, where `cid worktree add` would put one, and prints its
+  path — so reviewing a pull request no longer means switching the tree you
+  are working in. If a worktree already has the branch, you get that one.
+  The new `pr-worktree-cd` action binds it and `cd`s there; the starter config
+  suggests `ctrl-f7`, and `ctrl-f7` does the same inside every pull request
+  selector. macOS claims Control-F7 for "Change the way Tab moves focus" by
+  default: turn that off under System Settings → Keyboard → Keyboard Shortcuts
+  → Keyboard before binding it.
+
 ## v0.21.0
 
 *Released 2026-09-16*
