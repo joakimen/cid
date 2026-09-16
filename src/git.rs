@@ -26,8 +26,11 @@ const SEP: char = '\x1f';
 /// Where a branch exists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BranchKind {
-    /// Only in this clone — never pushed, or its upstream is gone.
+    /// Only in this clone, and never pushed.
     Local,
+    /// Pushed once, but the remote branch it tracked has since been deleted —
+    /// on GitHub, most often by merging its pull request.
+    Gone,
     /// Both here and on a remote.
     Tracked,
     /// Only on a remote; checking it out creates the local branch.
@@ -40,6 +43,7 @@ impl BranchKind {
     pub fn color(self) -> u8 {
         match self {
             BranchKind::Local => 3,   // yellow — here only
+            BranchKind::Gone => 4,    // blue   — its remote side is gone
             BranchKind::Tracked => 2, // green  — in sync with a remote
             BranchKind::Remote => 6,  // cyan   — not here yet
         }
@@ -49,6 +53,7 @@ impl BranchKind {
     pub fn tag(self) -> &'static str {
         match self {
             BranchKind::Local => "local",
+            BranchKind::Gone => "gone",
             BranchKind::Tracked => "both",
             BranchKind::Remote => "remote",
         }
@@ -61,8 +66,8 @@ pub enum Filter {
     /// Local and remote-only branches. The default.
     #[default]
     All,
-    /// Branches that exist in this clone ([`BranchKind::Local`] and
-    /// [`BranchKind::Tracked`]).
+    /// Branches that exist in this clone ([`BranchKind::Local`],
+    /// [`BranchKind::Gone`] and [`BranchKind::Tracked`]).
     Local,
     /// Branches that exist on a remote ([`BranchKind::Tracked`] and
     /// [`BranchKind::Remote`]).
@@ -83,7 +88,7 @@ impl Filter {
         match self {
             Filter::All => true,
             Filter::Local => kind != BranchKind::Remote,
-            Filter::Remote => kind != BranchKind::Local,
+            Filter::Remote => matches!(kind, BranchKind::Tracked | BranchKind::Remote),
         }
     }
 }
@@ -168,6 +173,10 @@ fn split_remote(short: &str) -> Option<(&str, &str)> {
 /// Fold ref rows into the branch list shown to the user: a local branch whose
 /// name also exists on a remote is [`BranchKind::Tracked`] rather than two
 /// rows, and `origin/HEAD` is dropped. Input order is preserved.
+///
+/// A local branch whose configured upstream names a ref that no longer exists
+/// is [`BranchKind::Gone`] — git's own `[gone]`, worked out from the same rows
+/// rather than asked for again.
 pub fn classify(lines: &[RefLine]) -> Vec<Branch> {
     let locals: HashSet<&str> = lines
         .iter()
@@ -192,6 +201,17 @@ pub fn classify(lines: &[RefLine]) -> Vec<Branch> {
         .filter_map(|short| split_remote(short).map(|(_, branch)| branch))
         .collect();
 
+    // Every ref by the short name an upstream is written in: `origin/main` for
+    // a remote branch, and `main` for a local one tracked with `branch -u main`.
+    let refs: HashSet<&str> = lines
+        .iter()
+        .filter_map(|line| {
+            line.refname
+                .strip_prefix("refs/remotes/")
+                .or_else(|| line.refname.strip_prefix("refs/heads/"))
+        })
+        .collect();
+
     let mut branches = Vec::new();
     for line in lines {
         if let Some(name) = line.refname.strip_prefix("refs/heads/") {
@@ -201,7 +221,9 @@ pub fn classify(lines: &[RefLine]) -> Vec<Branch> {
                 Some((_, branch)) => branch,
                 None => name,
             };
-            let kind = if on_remote.contains(counterpart) {
+            let kind = if !line.upstream.is_empty() && !refs.contains(line.upstream.as_str()) {
+                BranchKind::Gone
+            } else if on_remote.contains(counterpart) {
                 BranchKind::Tracked
             } else {
                 BranchKind::Local
@@ -954,9 +976,36 @@ mod tests {
     }
 
     #[test]
-    fn stale_upstream_is_local_only() {
+    fn an_upstream_that_no_longer_exists_is_gone() {
         let got = classify(&[line("refs/heads/gone", false, "origin/gone")]);
+        assert_eq!(got[0].kind, BranchKind::Gone);
+    }
+
+    /// git's `[gone]` is about the ref the branch tracks, not about whether a
+    /// branch of the same name exists somewhere else.
+    #[test]
+    fn a_namesake_on_another_remote_does_not_bring_a_gone_upstream_back() {
+        let got = classify(&[
+            line("refs/heads/feat", false, "origin/feat"),
+            line("refs/remotes/fork/feat", false, ""),
+        ]);
+        assert_eq!(got[0].kind, BranchKind::Gone);
+    }
+
+    #[test]
+    fn a_local_upstream_that_exists_is_not_gone() {
+        let got = classify(&[
+            line("refs/heads/topic", false, "main"),
+            line("refs/heads/main", true, ""),
+        ]);
         assert_eq!(got[0].kind, BranchKind::Local);
+    }
+
+    #[test]
+    fn a_gone_branch_is_local_to_the_filters() {
+        assert!(Filter::Local.accepts(BranchKind::Gone));
+        assert!(!Filter::Remote.accepts(BranchKind::Gone));
+        assert!(Filter::All.accepts(BranchKind::Gone));
     }
 
     #[test]

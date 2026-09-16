@@ -526,7 +526,7 @@ enum BranchCmd {
     /// List local and remote branches
     #[command(visible_alias = "list")]
     Ls {
-        /// Show the current-branch marker, local/both/remote tag, and last commit
+        /// Show the current-branch marker, local/gone/both/remote tag, and last commit
         #[arg(long)]
         status: bool,
         #[command(flatten)]
@@ -560,6 +560,23 @@ enum BranchCmd {
         /// Branches to delete; omit to select interactively
         #[arg(value_name = "BRANCH")]
         branches: Vec<String>,
+        /// Delete without asking
+        #[arg(short, long)]
+        yes: bool,
+    },
+    /// Delete the local branches whose remote branch is gone
+    ///
+    /// A branch pushed and then deleted on the remote — which is what merging
+    /// its pull request does, where GitHub deletes head branches — is work that
+    /// has landed, even after a squash merge left nothing in HEAD for git to
+    /// recognise. `branch ls --status` tags those `gone`.
+    ///
+    /// Everything that would go is listed before the question is put. A branch
+    /// a worktree has checked out is kept and named on stderr.
+    Prune {
+        /// Fetch from all remotes (pruning deleted branches) first
+        #[arg(short = 'f', long)]
+        fetch: bool,
         /// Delete without asking
         #[arg(short, long)]
         yes: bool,
@@ -1043,6 +1060,7 @@ fn dispatch(ctx: &Ctx, command: Command) -> anyhow::Result<()> {
                 cmd::branch::checkout(ctx, branch.as_deref(), scope.filter(), scope.fetch)
             }
             BranchCmd::Rm { branches, yes } => cmd::branch::rm(ctx, &branches, yes),
+            BranchCmd::Prune { fetch, yes } => cmd::branch::prune(ctx, fetch, yes),
         },
         Command::Worktree { command } => match command {
             WorktreeCmd::Ls {
