@@ -13,6 +13,10 @@ raised, never by hand.
 
 ## Unreleased
 
+## v0.22.0
+
+*Released 2026-09-16*
+
 ### Added
 
 - **`cid pr checkout --worktree`** (`-w`) checks a pull request out in a
