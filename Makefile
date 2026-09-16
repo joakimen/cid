@@ -1,7 +1,7 @@
 .DEFAULT_GOAL := build
 
 .PHONY: check
-check: fmt-check lint test
+check: fmt-check lint test test-hooks
 
 .PHONY: build
 build: check
@@ -10,6 +10,11 @@ build: check
 .PHONY: test
 test:
 	cargo test
+
+# The agent hooks in .claude/hooks, against a throwaway repository. Needs jq.
+.PHONY: test-hooks
+test-hooks:
+	.claude/hooks/no-commit-on-main.test.sh
 
 .PHONY: lint
 lint:

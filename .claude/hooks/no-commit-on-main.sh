@@ -14,14 +14,40 @@ command=$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/nul
 # Anchored to a command position so a quoted `git commit` in prose is not a
 # match. `-C <path>` and `-c <k>=<v>` are matched with their value, or
 # `git -C . commit` slips through.
-printf '%s' "$command" |
-	grep -Eq '(^|[;&|(]|&&|\|\|)[[:space:]]*git([[:space:]]+(-[Cc][[:space:]]+[^[:space:]]+|-[^[:space:]]+))*[[:space:]]+commit([[:space:]]|$)' ||
-	exit 0
+invocation=$(printf '%s' "$command" |
+	grep -Eo '(^|[;&|(]|&&|\|\|)[[:space:]]*git([[:space:]]+(-[Cc][[:space:]]+[^[:space:]]+|-[^[:space:]]+))*[[:space:]]+commit([[:space:]]|$)' |
+	tail -n 1) || exit 0
+[ -n "$invocation" ] || exit 0
 
-# The command's own directory, not the project root: a commit inside a worktree
-# is on that worktree's branch.
+# A path as written in the command, unquoted and resolved against `$1`.
+resolve() {
+	local base=$1 path=$2
+	path=${path#[\"\']}
+	path=${path%[\"\']}
+	case $path in
+	/*) printf '%s' "$path" ;;
+	\~ | \~/*) printf '%s' "${HOME}${path#\~}" ;;
+	*) printf '%s' "$base/$path" ;;
+	esac
+}
+
+# The directory git commits in, which decides the branch: the command's own
+# directory, moved by the last `cd` chained before the commit and then by each
+# `-C` git is given, in order.
 cwd=$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null)
 [ -n "${cwd:-}" ] || cwd="${CLAUDE_PROJECT_DIR:-$PWD}"
+
+before=${command%"$invocation"*}
+target=$(printf '%s' "$before" |
+	grep -Eo '(^|[;&|(])[[:space:]]*cd[[:space:]]+[^;&|)]+' |
+	tail -n 1 |
+	sed -E 's/^[;&|(]?[[:space:]]*cd[[:space:]]+//; s/[[:space:]]+$//') || true
+[ -z "${target:-}" ] || cwd=$(resolve "$cwd" "$target")
+
+while read -r path; do
+	[ -n "$path" ] || continue
+	cwd=$(resolve "$cwd" "$path")
+done < <(printf '%s' "$invocation" | grep -Eo -- '-C[[:space:]]+[^[:space:]]+' | sed -E 's/^-C[[:space:]]+//')
 
 branch=$(git -C "$cwd" rev-parse --abbrev-ref HEAD 2>/dev/null) || exit 0
 [ "$branch" = "main" ] || exit 0
