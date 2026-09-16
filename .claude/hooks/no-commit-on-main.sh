@@ -49,8 +49,8 @@ fi
 cat >&2 <<'EOF'
 Refusing: HEAD is `main`, and this commit would land on it directly.
 
-CLAUDE.md: "Never commit straight to `main`. The pull request is what leaves a
-reviewable record of work nobody watched happen."
+CLAUDE.md: "Never commit straight to `main`, with one exception: a commit whose
+every path ends in `.md` may be committed and pushed to `main` directly."
 
 Only a commit whose every staged path ends in `.md` is exempt, and this one
 does not qualify — stage the Markdown on its own, or put the work on a branch.
