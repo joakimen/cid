@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Result, bail};
 
-use crate::git::{self, Branch, BranchKind, Filter, Worktree};
+use crate::git::{self, Branch, BranchKind, Filter, Landed, MARK_WIDTH, Worktree};
 use crate::path::display_path;
 use crate::select::{Preview, SelectItem};
 use crate::term;
@@ -236,54 +236,6 @@ fn deletable(branches: &[Branch]) -> Vec<&Branch> {
         .collect()
 }
 
-/// Whether a branch's work has landed, as far as this clone can tell without
-/// asking GitHub. Shown beside every branch about to be deleted, and in the
-/// deletion selector.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Landed {
-    /// Its commits are in HEAD, so git deletes it without being forced.
-    Merged,
-    /// The remote branch it tracked was deleted. A squash merge leaves nothing
-    /// else behind to see, so this is how finished work usually looks.
-    Gone,
-    /// Neither. A fact, not a warning: squash-merged work whose remote branch
-    /// was kept looks exactly like this.
-    Unmerged,
-}
-
-impl Landed {
-    /// What is known about `name`, which may not be a branch at all when it
-    /// was typed on the command line — git then says so when deleting it.
-    fn of(name: &str, branches: &[Branch], merged: &HashSet<String>) -> Self {
-        if merged.contains(name) {
-            return Self::Merged;
-        }
-        match branches.iter().find(|branch| branch.name == name) {
-            Some(branch) if branch.kind == BranchKind::Gone => Self::Gone,
-            _ => Self::Unmerged,
-        }
-    }
-
-    fn mark(self) -> &'static str {
-        match self {
-            Self::Merged => "merged",
-            Self::Gone => "upstream gone",
-            Self::Unmerged => "not merged",
-        }
-    }
-
-    fn color(self) -> u8 {
-        match self {
-            Self::Merged => 2,
-            Self::Gone => BranchKind::Gone.color(),
-            Self::Unmerged => 3,
-        }
-    }
-}
-
-/// The widest [`Landed::mark`], so the column after it lines up.
-const MARK_WIDTH: usize = "upstream gone".len();
-
 /// Selector rows for deletion: the branch, whether it has landed, when it was
 /// last committed to and what it last carried.
 fn rm_items(branches: &[Branch], merged: &HashSet<String>) -> Vec<SelectItem> {
@@ -377,7 +329,7 @@ pub fn prune(ctx: &Ctx, fetch: bool, yes: bool) -> Result<()> {
     for (branch, tree) in &kept {
         let path = tree.path.to_string_lossy();
         eprintln!(
-            "note: keeping {}, checked out in {}",
+            "note: keeping {}, checked out in {} — `cid worktree rm --branch` removes both",
             branch.name,
             display_path(&path, ctx.home_str(), false)
         );

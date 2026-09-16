@@ -5,11 +5,12 @@
 //! so `sel` prints the path and the fish integration's ctrl-t moves there —
 //! the same split as `repo sel`. `add` prints its path for the same reason.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 
-use crate::git::{self, Worktree};
+use crate::git::{self, Landed, MARK_WIDTH, Worktree};
 use crate::path::{display_path, expand_home_dir};
 use crate::select::{Choice, SelectItem};
 use crate::{Ctx, select, term};
@@ -270,14 +271,71 @@ fn removable(worktrees: &[Worktree]) -> Vec<&Worktree> {
         .collect()
 }
 
+/// What `rm` will do with one tree: its path as given, and the branch it has
+/// checked out when that branch goes too.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Removal {
+    path: String,
+    branch: Option<(String, Landed)>,
+}
+
+/// The tree at `path`, compared through `resolve` for the reason
+/// [`git::mark_current`] does: a path typed at the prompt may reach the tree
+/// through a symlink git has already resolved.
+fn tree_at<'a>(
+    worktrees: &'a [Worktree],
+    path: &Path,
+    resolve: impl Fn(&Path) -> PathBuf,
+) -> Option<&'a Worktree> {
+    let wanted = resolve(path);
+    worktrees.iter().find(|tree| resolve(&tree.path) == wanted)
+}
+
+/// Pair each target with the branch that goes with it, when `with_branch`.
+/// A detached or bare tree has no branch to take, and a path that is no tree
+/// is left for git to refuse.
+fn plan(
+    targets: Vec<String>,
+    worktrees: &[Worktree],
+    branches: &[git::Branch],
+    merged: &HashSet<String>,
+    with_branch: bool,
+    resolve: impl Fn(&Path) -> PathBuf,
+) -> Vec<Removal> {
+    targets
+        .into_iter()
+        .map(|path| {
+            let branch = with_branch
+                .then(|| tree_at(worktrees, Path::new(&path), &resolve))
+                .flatten()
+                .filter(|tree| !tree.branch.is_empty())
+                .map(|tree| {
+                    let landed = Landed::of(&tree.branch, branches, merged);
+                    (tree.branch.clone(), landed)
+                });
+            Removal { path, branch }
+        })
+        .collect()
+}
+
 /// `cid worktree rm [PATH]...` — remove working trees, selecting them when
 /// none are named.
 ///
 /// What will go is printed before the question is put, as `file prune` does:
 /// "remove 2 trees?" is answerable only by someone who has seen the two. The
-/// branches they had checked out are left alone — that is `cid branch rm`.
-pub fn remove(ctx: &Ctx, paths: &[String], force: bool, yes: bool) -> Result<()> {
+/// branches they had checked out are left alone unless `with_branch`, and are
+/// then deleted the way `cid branch rm` deletes them — forced where git cannot
+/// see they have landed, since the list said so and was agreed to.
+pub fn remove(
+    ctx: &Ctx,
+    paths: &[String],
+    force: bool,
+    with_branch: bool,
+    yes: bool,
+) -> Result<()> {
     let worktrees = load(ctx)?;
+    let branches = git::branches()?;
+    let merged = git::merged_branches()?;
 
     let targets: Vec<String> = if paths.is_empty() {
         let offered = removable(&worktrees);
@@ -286,7 +344,7 @@ pub fn remove(ctx: &Ctx, paths: &[String], force: bool, yes: bool) -> Result<()>
         }
         let rows: Vec<SelectItem> = {
             let owned: Vec<Worktree> = offered.into_iter().cloned().collect();
-            items(&owned, ctx.home_str())
+            rm_items(&owned, &branches, &merged, ctx.home_str())
         };
         match select::select_many(rows, "Remove worktrees", &ctx.config.selector) {
             Ok(selected) => selected,
@@ -299,51 +357,125 @@ pub fn remove(ctx: &Ctx, paths: &[String], force: bool, yes: bool) -> Result<()>
     if targets.is_empty() {
         return Ok(());
     }
+    let removals = plan(
+        targets,
+        &worktrees,
+        &branches,
+        &merged,
+        with_branch,
+        |path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf()),
+    );
 
-    if !confirm_removal(ctx, &targets, yes)? {
+    if !confirm_removal(ctx, &removals, yes)? {
         return Ok(());
     }
 
-    let mut failed = 0;
-    for path in &targets {
-        match git::remove_worktree(Path::new(path), force) {
-            Ok(()) => println!("Removed {}", display_path(path, ctx.home_str(), false)),
+    let (mut trees_failed, mut branches_failed) = (0, 0);
+    for removal in &removals {
+        match git::remove_worktree(Path::new(&removal.path), force) {
+            Ok(()) => println!(
+                "Removed {}",
+                display_path(&removal.path, ctx.home_str(), false)
+            ),
             // git says why on the terminal it was handed; a second sentence
             // from cid over the top of it would only be vaguer.
-            Err(_) => failed += 1,
+            Err(_) => {
+                trees_failed += 1;
+                continue;
+            }
+        }
+        let Some((name, landed)) = &removal.branch else {
+            continue;
+        };
+        match git::delete_branch(name, *landed != Landed::Merged) {
+            Ok(()) => println!("Deleted {name}"),
+            Err(err) => {
+                branches_failed += 1;
+                eprintln!("error: {name}: {err:#}");
+            }
         }
     }
-    if failed > 0 {
+    if trees_failed > 0 {
         bail!(
-            "{failed} of {} worktrees could not be removed",
-            targets.len()
+            "{trees_failed} of {} worktrees could not be removed",
+            removals.len()
         );
+    }
+    if branches_failed > 0 {
+        bail!("{branches_failed} branches could not be deleted");
     }
     Ok(())
 }
 
+/// Selector rows for removal: the usual row, with what is known about whether
+/// each tree's branch has landed ahead of the path — a tree whose branch is
+/// gone upstream is usually the finished one being looked for.
+fn rm_items(
+    worktrees: &[Worktree],
+    branches: &[git::Branch],
+    merged: &HashSet<String>,
+    home: &str,
+) -> Vec<SelectItem> {
+    let columns = Columns::of(worktrees);
+    worktrees
+        .iter()
+        .map(|worktree| {
+            let abs = worktree.path.to_string_lossy().into_owned();
+            let mark = match worktree.branch.as_str() {
+                "" => "",
+                branch => Landed::of(branch, branches, merged).mark(),
+            };
+            let row = columns.row(
+                worktree,
+                &format!("{mark:<MARK_WIDTH$}  {}", display_path(&abs, home, false)),
+            );
+            let item = SelectItem::new(row, abs.clone()).preview(select::checkout_preview(&abs));
+            match worktree.color() {
+                Some(color) => item.color(color),
+                None => item,
+            }
+        })
+        .collect()
+}
+
 /// Show what is about to go and ask, unless `yes`.
-fn confirm_removal(ctx: &Ctx, targets: &[String], yes: bool) -> Result<bool> {
+fn confirm_removal(ctx: &Ctx, removals: &[Removal], yes: bool) -> Result<bool> {
+    let color = ctx.color();
+    let paths: Vec<String> = removals
+        .iter()
+        .map(|removal| display_path(&removal.path, ctx.home_str(), false))
+        .collect();
+    let width = paths.iter().map(|p| p.chars().count()).max().unwrap_or(0);
+
     let mut out = term::Listing::stdout();
-    for path in targets {
-        if !out.line(&display_path(path, ctx.home_str(), false))? {
+    for (removal, path) in removals.iter().zip(&paths) {
+        let line = match &removal.branch {
+            Some((name, landed)) => format!(
+                "{path:<width$}  {}",
+                term::paint(&format!("{name}  {}", landed.mark()), landed.color(), color)
+            ),
+            None => path.clone(),
+        };
+        if !out.line(line.trim_end())? {
             return Ok(false);
         }
     }
     out.finish()?;
 
+    let branches = removals.iter().filter(|r| r.branch.is_some()).count();
     match term::Confirm::resolve(yes) {
         term::Confirm::Assumed => Ok(true),
         term::Confirm::Ask => {
-            let question = format!(
-                "Remove {} {}?",
-                targets.len(),
-                if targets.len() == 1 {
-                    "worktree"
-                } else {
-                    "worktrees"
-                }
-            );
+            let trees = if removals.len() == 1 {
+                "worktree"
+            } else {
+                "worktrees"
+            };
+            let question = match branches {
+                0 => format!("Remove {} {trees}?", removals.len()),
+                1 => format!("Remove {} {trees} and 1 branch?", removals.len()),
+                n => format!("Remove {} {trees} and {n} branches?", removals.len()),
+            };
             let answer = term::confirm(&question)?;
             if !answer {
                 println!("Nothing removed");
@@ -495,5 +627,82 @@ mod tests {
         assert!(cmd.contains("-C '/home/u/dev/cid'"), "{cmd}");
         assert!(cmd.contains("--no-optional-locks"), "{cmd}");
         assert!(cmd.contains("--max-count=20"), "unbounded log: {cmd}");
+    }
+
+    fn gone_feat() -> Vec<git::Branch> {
+        git::classify(&[git::RefLine {
+            refname: "refs/heads/feat/x".into(),
+            head: false,
+            symref: String::new(),
+            upstream: "origin/feat/x".into(),
+            date: "1 day ago".into(),
+            subject: "done".into(),
+        }])
+    }
+
+    const TREE: &str = "/home/u/dev/cid/.claude/worktrees/feat";
+
+    #[test]
+    fn a_removal_takes_no_branch_unless_asked() {
+        let removals = plan(
+            vec![TREE.into()],
+            &worktrees(),
+            &gone_feat(),
+            &HashSet::new(),
+            false,
+            Path::to_path_buf,
+        );
+        assert_eq!(removals[0].branch, None);
+    }
+
+    #[test]
+    fn a_removal_with_its_branch_says_whether_that_branch_has_landed() {
+        let removals = plan(
+            vec![TREE.into()],
+            &worktrees(),
+            &gone_feat(),
+            &HashSet::new(),
+            true,
+            Path::to_path_buf,
+        );
+        assert_eq!(
+            removals[0].branch,
+            Some(("feat/x".to_string(), Landed::Gone))
+        );
+    }
+
+    #[test]
+    fn a_tree_is_found_by_the_path_it_resolves_to() {
+        let trees = worktrees();
+        let resolve = |path: &Path| {
+            PathBuf::from(
+                path.to_string_lossy()
+                    .replace("/link/", "/home/u/dev/cid/.claude/worktrees/"),
+            )
+        };
+        let found = tree_at(&trees, Path::new("/link/feat"), resolve);
+        assert_eq!(found.map(|tree| tree.branch.as_str()), Some("feat/x"));
+    }
+
+    #[test]
+    fn a_path_that_is_no_tree_and_a_detached_tree_bring_no_branch() {
+        let mut trees = worktrees();
+        trees[1].branch.clear();
+        let removals = plan(
+            vec![TREE.into(), "/elsewhere".into()],
+            &trees,
+            &gone_feat(),
+            &HashSet::new(),
+            true,
+            Path::to_path_buf,
+        );
+        assert!(removals.iter().all(|removal| removal.branch.is_none()));
+    }
+
+    #[test]
+    fn removal_rows_mark_a_tree_whose_branch_is_gone() {
+        let rows = rm_items(&worktrees()[1..], &gone_feat(), &HashSet::new(), "/home/u");
+        assert!(rows[0].label.contains("upstream gone"), "{}", rows[0].label);
+        assert_eq!(rows[0].value(), TREE);
     }
 }
