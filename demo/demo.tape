@@ -22,9 +22,13 @@ Enter
 Sleep 1s
 Show
 
+# Every command holds on the prompt before Enter: the selector it opens covers
+# the line, and the command is what a viewer needs to read.
+
 # --- 1. Jump to a repository -------------------------------------------------
 # The prompt names the directory, so the cd shows.
 Type 'cd "$(cid repo sel)"'
+Sleep 700ms
 Enter
 Sleep 700ms
 Type "bill"
@@ -34,6 +38,7 @@ Sleep 900ms
 
 # --- 2. Check out a branch that only exists on the remote --------------------
 Type "cid branch checkout"
+Sleep 700ms
 Enter
 Sleep 800ms
 
@@ -49,6 +54,7 @@ Sleep 1300ms
 
 # --- 3. Check out a pull request, reading its checks and body first ----------
 Type "cid pr checkout"
+Sleep 700ms
 Enter
 Sleep 1600ms
 Down
@@ -60,6 +66,7 @@ Sleep 1300ms
 # ctrl-r switches the query from note names to the text inside them.
 # $EDITOR is cat in the sandbox, so the note lands on screen.
 Type "cid note open"
+Sleep 700ms
 Enter
 Sleep 600ms
 Ctrl+R
@@ -70,6 +77,7 @@ Sleep 1800ms
 
 # --- 5. Find a file where you are standing and open it -----------------------
 Type "cid edit"
+Sleep 700ms
 Enter
 Sleep 600ms
 Type "quota"
