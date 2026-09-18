@@ -1,8 +1,8 @@
 //! Terminal capability checks shared by the printing commands.
 //!
 //! Colour is decided once, at startup, by [`ColorChoice::resolve`] and carried
-//! on [`Ctx`](crate::Ctx). [`Spinner`] and [`ScratchRow`] touch the display
-//! only when there is one to touch.
+//! on [`Ctx`](crate::Ctx). [`Spinner`], [`Board`] and [`ScratchRow`] touch the
+//! display only when there is one to touch.
 
 use std::io::{IsTerminal, Write};
 
@@ -534,6 +534,103 @@ impl Drop for Spinner {
         let mut err = std::io::stderr().lock();
         let _ = write!(err, "{CLEAR_LINE}");
         let _ = err.flush();
+    }
+}
+
+/// What a [`Board`] draws: every row, given the spinner's current frame and
+/// the terminal's width in columns. Each row must fit in that width.
+pub type Render = dyn Fn(&str, usize) -> Vec<String> + Send + Sync;
+
+/// A block of rows on stderr redrawn in place until dropped, then drawn once
+/// more and left behind — a spinner for several things at once.
+///
+/// The rows are whatever [`Render`] returns on each frame, so the caller keeps
+/// its own state and the board only asks for it. Every redraw steps back up
+/// over the rows the last one drew, which is why a row must never wrap: the
+/// row count it steps over would then be short.
+pub struct Board {
+    stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+    render: Arc<Render>,
+    drawn: Arc<Mutex<usize>>,
+}
+
+/// Start drawing `render` on stderr, or `None` when stderr is not a terminal —
+/// the caller then reports each result as a line of its own.
+#[must_use]
+pub fn board(render: Arc<Render>) -> Option<Board> {
+    if !std::io::stderr().is_terminal() {
+        return None;
+    }
+    let stop = Arc::new(AtomicBool::new(false));
+    let drawn = Arc::new(Mutex::new(0));
+
+    let flag = Arc::clone(&stop);
+    let rows = Arc::clone(&render);
+    let count = Arc::clone(&drawn);
+    let thread = std::thread::spawn(move || {
+        let mut frames = FRAMES.iter().cycle();
+        while !flag.load(Ordering::Relaxed) {
+            let frame = frames.next().unwrap_or(&FRAMES[0]);
+            redraw(&*rows, frame, &count);
+            for _ in 0..10 {
+                if flag.load(Ordering::Relaxed) {
+                    return;
+                }
+                std::thread::sleep(FRAME_TIME / 10);
+            }
+        }
+    });
+
+    Some(Board {
+        stop,
+        thread: Some(thread),
+        render,
+        drawn,
+    })
+}
+
+/// Step back over the rows drawn last time and draw every row afresh.
+fn redraw(render: &Render, frame: &str, drawn: &Mutex<usize>) {
+    // One column short of the edge: a row that fills the last column leaves
+    // some terminals waiting to wrap on the next character.
+    let rows = render(frame, columns().saturating_sub(1));
+    let Ok(mut drawn) = drawn.lock() else {
+        return;
+    };
+    let mut out = String::new();
+    if *drawn > 0 {
+        out.push_str(&format!("\x1b[{}A", *drawn));
+    }
+    for row in &rows {
+        out.push_str(CLEAR_LINE);
+        out.push_str(row);
+        out.push_str("\r\n");
+    }
+    let mut err = std::io::stderr().lock();
+    let _ = err.write_all(out.as_bytes());
+    let _ = err.flush();
+    *drawn = rows.len();
+}
+
+/// The width of the terminal on stderr, or 80 when it will not say.
+fn columns() -> usize {
+    match rustix::termios::tcgetwinsize(std::io::stderr()) {
+        Ok(size) if size.ws_col > 0 => usize::from(size.ws_col),
+        _ => 80,
+    }
+}
+
+impl Drop for Board {
+    /// Stop the animation and draw the rows as they finally stand, leaving
+    /// them on screen with the cursor below.
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(thread) = self.thread.take() {
+            // Joined before the last draw, or a frame in flight lands after it.
+            let _ = thread.join();
+        }
+        redraw(&*self.render, FRAMES[0], &self.drawn);
     }
 }
 

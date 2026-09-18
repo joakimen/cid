@@ -841,8 +841,13 @@ enum ProjectCmd {
     ///
     /// `mise install` runs first where the project pins its tools with mise,
     /// and the rest then run at once under `mise exec` — so a toolchain it just
-    /// installed is found without re-entering the shell. Each command's output
-    /// is held back and shown only if it failed.
+    /// installed is found without re-entering the shell.
+    ///
+    /// The whole plan is drawn before anything runs, the steps that wait for
+    /// mise indented under it, and each line shows a clock and the command's
+    /// latest output while it works. The full output is shown only for a step
+    /// that failed; `--verbose` streams all of it instead, behind a prefix
+    /// naming the step.
     ///
     /// The fish integration calls this `i`.
     Deps {

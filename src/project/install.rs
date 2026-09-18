@@ -21,6 +21,16 @@ impl Plan {
     pub fn steps(&self) -> impl Iterator<Item = &Step> {
         self.mise.iter().chain(self.parallel.iter())
     }
+
+    /// Every step in the order it is started, with the name of the step it
+    /// waits for.
+    pub fn dependencies(&self) -> impl Iterator<Item = (&Step, Option<&'static str>)> {
+        let mise = self.mise.as_ref().map(|step| step.name);
+        self.mise
+            .iter()
+            .map(|step| (step, None))
+            .chain(self.parallel.iter().map(move |step| (step, mise)))
+    }
 }
 
 pub fn plan(detections: &[Detection]) -> Plan {
@@ -179,6 +189,29 @@ mod tests {
         }]);
 
         assert_eq!(plan.parallel[0].evidence, "package.json + bun.lock");
+    }
+
+    #[test]
+    fn every_other_step_waits_for_mise() {
+        let plan = plan(&detections(&[
+            Toolchain::Rust,
+            Toolchain::Mise,
+            Toolchain::Go,
+        ]));
+
+        assert_eq!(
+            plan.dependencies()
+                .map(|(step, after)| (step.name, after))
+                .collect::<Vec<_>>(),
+            vec![("mise", None), ("rust", Some("mise")), ("go", Some("mise"))]
+        );
+    }
+
+    #[test]
+    fn without_mise_no_step_waits() {
+        let plan = plan(&detections(&[Toolchain::Rust, Toolchain::Go]));
+
+        assert!(plan.dependencies().all(|(_, after)| after.is_none()));
     }
 
     #[test]

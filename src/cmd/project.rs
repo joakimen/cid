@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, BufRead, BufReader, Read};
 use std::path::Path;
 use std::process::{Command, ExitStatus, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -133,32 +134,18 @@ fn print(lines: &[String]) -> Result<()> {
 ///
 /// The concurrency buys the wall clock of the slowest install rather than the
 /// sum of them all — every one of them waits on a network it does not share
-/// with the others. It costs the live ordering of the status lines, which
-/// arrive as each step finishes rather than in plan order, and the output of a
-/// failed step being held back until it has one.
+/// with the others. It costs the output of a failed step being held back until
+/// every step has finished, and with no terminal to redraw on, the status lines
+/// arriving as each step finishes rather than in plan order.
 fn run(ctx: &Ctx, plan: install::Plan, dir: &Path) -> Result<()> {
     let started = Instant::now();
     let color = ctx.color();
-    let streaming = ctx.log.verbose();
-    let names: Vec<&str> = plan.steps().map(|step| step.name).collect();
-    let width = names
-        .iter()
-        .map(|name| name.chars().count())
-        .max()
-        .unwrap_or(0);
-    let prefixes = report::prefixes(&names, color);
-    let sink = |index: usize| {
-        if streaming {
-            Sink::Stream(&prefixes[index])
-        } else {
-            Sink::Capture
-        }
-    };
+    let live = Report::new(&plan, ctx.log.verbose(), color);
 
     let mut outcomes = Vec::new();
     let mut pinned = false;
     if let Some(step) = &plan.mise {
-        let outcome = step_of(step, dir, sink(0), width, color);
+        let outcome = live.run(0, step, dir);
         // Only a mise that actually installed can resolve the rest: wrapping
         // them after a failed install replaces each tool's own error with
         // mise's.
@@ -179,14 +166,12 @@ fn run(ctx: &Ctx, plan: install::Plan, dir: &Path) -> Result<()> {
         })
         .collect();
 
+    let running = &live;
     outcomes.extend(std::thread::scope(|scope| {
         let handles: Vec<_> = steps
             .iter()
             .enumerate()
-            .map(|(index, step)| {
-                let sink = sink(offset + index);
-                scope.spawn(move || step_of(step, dir, sink, width, color))
-            })
+            .map(|(index, step)| scope.spawn(move || running.run(offset + index, step, dir)))
             .collect();
         handles
             .into_iter()
@@ -194,7 +179,7 @@ fn run(ctx: &Ctx, plan: install::Plan, dir: &Path) -> Result<()> {
             .collect::<Vec<_>>()
     }));
 
-    if !streaming {
+    if !live.finish() {
         details(&outcomes);
     }
     eprintln!();
@@ -209,37 +194,163 @@ fn run(ctx: &Ctx, plan: install::Plan, dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Where a step's output goes while it runs.
-#[derive(Clone, Copy)]
-enum Sink<'a> {
-    /// Held back until the step ends, and shown only if it failed. Steps
-    /// running at once cannot interleave what they never wrote.
-    Capture,
-    /// Written to stderr as it arrives, behind the step's coloured prefix.
-    Stream(&'a str),
+/// How a run is reported while it happens.
+enum Report {
+    /// The whole plan drawn before anything runs, each line turning into a
+    /// spinner with the step's latest output as it starts and settling on its
+    /// result as it ends. Output is held back and shown only for a failure.
+    Tree {
+        slots: Vec<report::Slot>,
+        rows: Arc<Mutex<Vec<Row>>>,
+        /// `None` when stderr is not a terminal: each step then prints its
+        /// status line as it finishes.
+        board: Option<term::Board>,
+        color: bool,
+    },
+    /// Every line of every step written to stderr as it arrives, behind the
+    /// step's coloured prefix.
+    Stream { prefixes: Vec<String>, color: bool },
 }
 
-fn step_of(step: &Step, dir: &Path, sink: Sink<'_>, width: usize, color: bool) -> Outcome {
-    if let Sink::Stream(prefix) = sink {
-        eprintln!(
-            "{prefix}{}",
-            term::paint(&format!("$ {}", step.command_line()), DIM, color)
-        );
+/// A step's place in the tree, as the run has it so far.
+enum Row {
+    Waiting { after: Option<&'static str> },
+    Running { started: Instant, activity: String },
+    Finished(Outcome),
+}
+
+impl Report {
+    /// Lay out the whole plan before anything runs, so every step is on screen
+    /// from the start — the ones held back by mise included.
+    fn new(plan: &install::Plan, streaming: bool, color: bool) -> Self {
+        let nodes: Vec<report::Node> = plan
+            .dependencies()
+            .map(|(step, after)| report::Node {
+                name: step.name,
+                after,
+            })
+            .collect();
+
+        if streaming {
+            let names: Vec<&str> = nodes.iter().map(|node| node.name).collect();
+            let prefixes = report::prefixes(&names, color);
+            for (node, prefix) in nodes.iter().zip(&prefixes) {
+                if let Some(after) = node.after {
+                    eprintln!(
+                        "{prefix}{}",
+                        term::paint(&format!("waiting for {after}"), DIM, color)
+                    );
+                }
+            }
+            return Report::Stream { prefixes, color };
+        }
+
+        let slots = report::layout(&nodes);
+        let rows = Arc::new(Mutex::new(
+            nodes
+                .iter()
+                .map(|node| Row::Waiting { after: node.after })
+                .collect::<Vec<_>>(),
+        ));
+        let render = {
+            let slots = slots.clone();
+            let rows = Arc::clone(&rows);
+            Arc::new(move |frame: &str, columns: usize| {
+                let rows = rows.lock().expect("the tree's rows were poisoned");
+                slots
+                    .iter()
+                    .zip(rows.iter())
+                    .map(|(slot, row)| report::tree_line(slot, &row.view(), frame, columns, color))
+                    .collect()
+            })
+        };
+
+        Report::Tree {
+            slots,
+            rows,
+            board: term::board(render),
+            color,
+        }
     }
 
+    /// Run the step at `index` in the plan, reporting it as it goes.
+    fn run(&self, index: usize, step: &Step, dir: &Path) -> Outcome {
+        match self {
+            Report::Tree {
+                slots,
+                rows,
+                board,
+                color,
+            } => {
+                let set =
+                    |row: Row| rows.lock().expect("the tree's rows were poisoned")[index] = row;
+                let started = Instant::now();
+                set(Row::Running {
+                    started,
+                    activity: String::new(),
+                });
+
+                let outcome = run_step(step, dir, &|line| {
+                    if let Some(activity) = report::activity(line) {
+                        set(Row::Running { started, activity });
+                    }
+                });
+
+                if board.is_none() {
+                    eprintln!("{}", report::status_line(&outcome, &slots[index], *color));
+                }
+                set(Row::Finished(outcome.clone()));
+                outcome
+            }
+            Report::Stream { prefixes, color } => {
+                let (prefix, color) = (&prefixes[index], *color);
+                eprintln!(
+                    "{prefix}{}",
+                    term::paint(&format!("$ {}", step.command_line()), DIM, color)
+                );
+                let outcome = run_step(step, dir, &|line| eprintln!("{prefix}{line}"));
+                if let Status::Skipped { reason } = &outcome.status {
+                    eprintln!(
+                        "{prefix}{}",
+                        term::paint(&format!("skipped: {reason}"), DIM, color)
+                    );
+                }
+                outcome
+            }
+        }
+    }
+
+    /// Settle the tree on its final state, leaving it on screen. Returns
+    /// whether the output was streamed, and so has been seen already.
+    fn finish(self) -> bool {
+        match self {
+            // Dropping the board draws it one last time.
+            Report::Tree { board, .. } => {
+                drop(board);
+                false
+            }
+            Report::Stream { .. } => true,
+        }
+    }
+}
+
+impl Row {
+    fn view(&self) -> report::Row<'_> {
+        match self {
+            Row::Waiting { after } => report::Row::Waiting { after: *after },
+            Row::Running { started, activity } => report::Row::Running {
+                elapsed: started.elapsed(),
+                activity,
+            },
+            Row::Finished(outcome) => report::Row::Finished(outcome),
+        }
+    }
+}
+
+fn run_step(step: &Step, dir: &Path, on_line: &(dyn Fn(&str) + Sync)) -> Outcome {
     let started = Instant::now();
-    let finished = match sink {
-        Sink::Capture => capture(step, dir),
-        Sink::Stream(prefix) => stream(step, dir, prefix),
-    };
-    let outcome = outcome(step, started.elapsed(), finished);
-
-    // A streamed step has already said everything it had to say; a captured
-    // one has said nothing until now.
-    if matches!(sink, Sink::Capture) {
-        eprintln!("{}", report::status_line(&outcome, width, color));
-    }
-    outcome
+    let finished = execute(step, dir, on_line);
+    outcome(step, started.elapsed(), finished)
 }
 
 /// A finished child process, before it is read as an outcome.
@@ -283,20 +394,13 @@ fn command(step: &Step, dir: &Path) -> Command {
     command
 }
 
-fn capture(step: &Step, dir: &Path) -> io::Result<Finished> {
-    let _child = stats::in_child();
-    let result = command(step, dir).stdin(Stdio::null()).output()?;
-
-    Ok(Finished {
-        status: result.status,
-        output: merge(&result.stdout, &result.stderr),
-    })
-}
-
-/// Forward both of a child's streams to stderr while it runs. They are read on
-/// separate threads so a child that fills one pipe does not block writing to
-/// the other.
-fn stream(step: &Step, dir: &Path, prefix: &str) -> io::Result<Finished> {
+/// Run a step, handing `on_line` each line it writes on either stream as it
+/// arrives and keeping every one of them, in that order, for a failure to show.
+///
+/// The streams are read on separate threads so a child that fills one pipe
+/// does not block writing to the other. The child gets no stdin, so a tool that
+/// prompts fails rather than waiting for an answer nobody is asked for.
+fn execute(step: &Step, dir: &Path, on_line: &(dyn Fn(&str) + Sync)) -> io::Result<Finished> {
     let _child = stats::in_child();
     let mut child = command(step, dir)
         .stdin(Stdio::null())
@@ -306,21 +410,29 @@ fn stream(step: &Step, dir: &Path, prefix: &str) -> io::Result<Finished> {
 
     let stdout = child.stdout.take().expect("stdout was piped");
     let stderr = child.stderr.take().expect("stderr was piped");
+    let output = Mutex::new(String::new());
+    let record = |line: &str| {
+        on_line(line);
+        let mut output = output.lock().expect("the output buffer was poisoned");
+        output.push_str(line);
+        output.push('\n');
+    };
 
     std::thread::scope(|scope| {
-        scope.spawn(|| forward(stdout, prefix));
-        scope.spawn(|| forward(stderr, prefix));
+        scope.spawn(|| lines(stdout, &record));
+        scope.spawn(|| lines(stderr, &record));
     });
 
+    let output = output.into_inner().expect("the output buffer was poisoned");
     Ok(Finished {
         status: child.wait()?,
-        output: String::new(),
+        output: output.trim_end().to_string(),
     })
 }
 
-/// Write each line of `source` to stderr behind `prefix`. One `eprintln!` per
-/// line is what keeps two steps' lines from landing inside one another.
-fn forward(source: impl Read, prefix: &str) {
+/// Call `on_line` with each line of `source`, without its line ending. Bytes
+/// that are not UTF-8 are replaced rather than dropped.
+fn lines(source: impl Read, on_line: &dyn Fn(&str)) {
     let mut reader = BufReader::new(source);
     let mut line = Vec::new();
 
@@ -329,29 +441,9 @@ fn forward(source: impl Read, prefix: &str) {
             break;
         }
         let text = String::from_utf8_lossy(&line);
-        eprintln!("{prefix}{}", text.trim_end_matches(['\n', '\r']));
+        on_line(text.trim_end_matches(['\n', '\r']));
         line.clear();
     }
-}
-
-/// Join a command's streams into the one block shown when it fails, stdout
-/// first, with the trailing blank lines taken off.
-fn merge(stdout: &[u8], stderr: &[u8]) -> String {
-    let mut merged = String::new();
-
-    for stream in [stdout, stderr] {
-        let text = String::from_utf8_lossy(stream);
-        let text = text.trim_end();
-        if text.is_empty() {
-            continue;
-        }
-        if !merged.is_empty() {
-            merged.push('\n');
-        }
-        merged.push_str(text);
-    }
-
-    merged
 }
 
 /// Print what each failed step had to say, under a heading naming it. Written
@@ -427,21 +519,25 @@ fn scan(dir: &Path) -> Result<Scan> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn merging_puts_stdout_before_stderr() {
-        assert_eq!(merge(b"out\n", b"err\n"), "out\nerr");
+    fn collect(source: &[u8]) -> Vec<String> {
+        let seen = std::cell::RefCell::new(Vec::new());
+        lines(source, &|line| seen.borrow_mut().push(line.to_string()));
+        seen.into_inner()
     }
 
     #[test]
-    fn merging_drops_the_streams_that_said_nothing() {
-        assert_eq!(merge(b"", b"err\n"), "err");
-        assert_eq!(merge(b"out\n", b""), "out");
-        assert_eq!(merge(b"", b""), "");
+    fn lines_are_reported_without_their_endings() {
+        assert_eq!(collect(b"one\r\ntwo\n\nthree"), ["one", "two", "", "three"]);
     }
 
     #[test]
-    fn merging_keeps_invalid_utf8_readable() {
-        assert_eq!(merge(&[0xff, b'a'], b""), "\u{fffd}a");
+    fn an_empty_stream_reports_nothing() {
+        assert!(collect(b"").is_empty());
+    }
+
+    #[test]
+    fn invalid_utf8_stays_readable() {
+        assert_eq!(collect(&[0xff, b'a', b'\n']), ["\u{fffd}a"]);
     }
 
     #[test]
