@@ -13,6 +13,10 @@ raised, never by hand.
 
 ## Unreleased
 
+## v0.22.1
+
+*Released 2026-09-18*
+
 ### Changed
 
 - **`cid project deps`** draws the whole install plan before anything runs,
