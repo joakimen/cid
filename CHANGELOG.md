@@ -13,6 +13,16 @@ raised, never by hand.
 
 ## Unreleased
 
+### Changed
+
+- **`cid project deps`** draws the whole install plan before anything runs,
+  with the steps that wait for `mise install` indented under it, and each step
+  shows a running clock and the latest line its command printed. A long
+  `mise install` now visibly makes progress instead of sitting on a blank
+  screen. The output kept for a failed step is in the order the command wrote
+  it, and `--verbose` lists what is waiting on mise up front and says when a
+  step was skipped.
+
 ## v0.22.0
 
 *Released 2026-09-16*

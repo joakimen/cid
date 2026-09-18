@@ -1,10 +1,13 @@
-//! Rendering a run of project steps for a terminal.
+//! Rendering a run of project steps for a terminal: the plan as a tree that is
+//! redrawn while it runs, or a coloured prefix per step when output streams.
 //!
 //! Everything here is pure: [`crate::cmd::project`] runs the steps and prints
 //! what comes back. Colour is the resolved [`crate::Ctx::color`], never a
 //! terminal check of its own.
 
 use std::time::Duration;
+
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::term::paint;
 
@@ -30,7 +33,8 @@ pub enum Status {
 pub struct Outcome {
     pub name: &'static str,
     pub status: Status,
-    /// Both of the command's streams, empty when its output was not captured.
+    /// Every line the command wrote to either stream, in the order it
+    /// arrived; empty when it never ran.
     pub output: String,
     pub duration: Duration,
 }
@@ -56,28 +60,186 @@ const DIM: u8 = crate::term::SECONDARY;
 const GREEN: u8 = 2;
 const RED: u8 = 1;
 
-/// One step's line, written as it finishes. `width` is the widest step name in
-/// the run, so the second column lines up however the steps interleave.
-pub fn status_line(outcome: &Outcome, width: usize, color: bool) -> String {
-    let name = pad(outcome.name, width);
+/// A step as the tree shows it: its name, and the step it waits for.
+pub struct Node<'a> {
+    pub name: &'a str,
+    pub after: Option<&'a str>,
+}
+
+/// Where a step's line sits in the tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Slot {
+    indent: &'static str,
+    /// The step's name, padded so every line's second column starts in one
+    /// place whatever the indent.
+    name: String,
+}
+
+/// Set before a step that waits for another, placing it under that step.
+const INDENT: &str = "  ";
+
+/// Indent every step that waits for another, and pad the names so the column
+/// after them lines up across the whole tree.
+pub fn layout(nodes: &[Node<'_>]) -> Vec<Slot> {
+    let indent = |node: &Node<'_>| if node.after.is_some() { INDENT } else { "" };
+    let width = nodes
+        .iter()
+        .map(|node| indent(node).len() + node.name.chars().count())
+        .max()
+        .unwrap_or(0);
+
+    nodes
+        .iter()
+        .map(|node| {
+            let indent = indent(node);
+            Slot {
+                indent,
+                name: pad(node.name, width - indent.len()),
+            }
+        })
+        .collect()
+}
+
+/// What a step in the tree is doing at the moment it is drawn.
+pub enum Row<'a> {
+    /// Not started: held back by the named step, or only not yet reached.
+    Waiting {
+        after: Option<&'a str>,
+    },
+    /// Started `elapsed` ago, and last said `activity`.
+    Running {
+        elapsed: Duration,
+        activity: &'a str,
+    },
+    Finished(&'a Outcome),
+}
+
+/// One line of the live tree, no wider than `columns` so a redraw never
+/// wraps onto a row it does not own. `frame` is the spinner's current glyph.
+pub fn tree_line(slot: &Slot, row: &Row<'_>, frame: &str, columns: usize, color: bool) -> String {
+    let Slot { indent, name } = slot;
+    match row {
+        Row::Waiting { after } => {
+            let waiting = after.map_or_else(
+                || "queued".to_string(),
+                |after| format!("waiting for {after}"),
+            );
+            format!(
+                "{indent}{} {}  {}",
+                paint("◌", DIM, color),
+                paint(name, DIM, color),
+                paint(&waiting, DIM, color)
+            )
+        }
+        Row::Running { elapsed, activity } => {
+            let clock = format!("{}s", elapsed.as_secs());
+            let used = indent.len() + 2 + name.width() + 2 + clock.len() + 2;
+            let activity = truncate(activity, columns.saturating_sub(used));
+            let line = format!(
+                "{indent}{} {name}  {}",
+                paint(frame, SPINNER, color),
+                paint(&clock, DIM, color)
+            );
+            if activity.is_empty() {
+                return line;
+            }
+            format!("{line}  {}", paint(&activity, DIM, color))
+        }
+        Row::Finished(outcome) => status_line(outcome, slot, color),
+    }
+}
+
+/// The spinner's hue, the one [`crate::term::spinner`] turns in.
+const SPINNER: u8 = 6;
+
+/// One step's final line: what the tree settles on, and what is printed alone
+/// when there is no terminal to draw the tree on.
+pub fn status_line(outcome: &Outcome, slot: &Slot, color: bool) -> String {
+    let Slot { indent, name } = slot;
     match &outcome.status {
         Status::Done => format!(
-            "{} {name}  {}",
+            "{indent}{} {name}  {}",
             paint("✓", GREEN, color),
             paint(&format_duration(outcome.duration), DIM, color)
         ),
         Status::Skipped { reason } => format!(
-            "{} {}  {}",
+            "{indent}{} {}  {}",
             paint("-", DIM, color),
-            paint(&name, DIM, color),
+            paint(name, DIM, color),
             paint(reason, DIM, color)
         ),
         Status::Failed { code } => format!(
-            "{} {name}  {}",
+            "{indent}{} {name}  {}",
             paint("✗", RED, color),
             paint(&failure_reason(*code), RED, color)
         ),
     }
+}
+
+/// A line of a step's output reduced to what is worth showing beside its
+/// spinner: escape sequences removed, and only the last frame of a line that
+/// redraws itself with carriage returns. A blank line is nothing to show.
+pub fn activity(line: &str) -> Option<String> {
+    strip_escapes(line)
+        .split('\r')
+        .map(|frame| crate::term::one_row(frame).trim().to_string())
+        .rfind(|frame| !frame.is_empty())
+}
+
+/// `text` without its ANSI escape sequences: CSI (`ESC [` … final byte) and
+/// OSC (`ESC ]` … BEL or `ESC \`). What is left of anything else is dropped
+/// with the other control characters by [`crate::term::one_row`].
+fn strip_escapes(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\x1b' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('[') => {
+                for c in chars.by_ref() {
+                    if ('\x40'..='\x7e').contains(&c) {
+                        break;
+                    }
+                }
+            }
+            Some(']') => {
+                while let Some(c) = chars.next() {
+                    if c == '\x07' || (c == '\x1b' && chars.next_if_eq(&'\\').is_some()) {
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// `text` cut to `columns` terminal cells, ending in `…` when anything was
+/// cut. Counted in cells rather than characters, since a wide character that
+/// overflows the row wraps it just as surely as two narrow ones.
+fn truncate(text: &str, columns: usize) -> String {
+    if text.width() <= columns {
+        return text.to_string();
+    }
+    let room = columns.saturating_sub(1);
+    let mut out = String::new();
+    let mut used = 0;
+    for c in text.chars() {
+        let width = c.width().unwrap_or(0);
+        if used + width > room {
+            break;
+        }
+        used += width;
+        out.push(c);
+    }
+    if columns > 0 {
+        out.push('…');
+    }
+    out
 }
 
 fn failure_reason(code: Option<i32>) -> String {
@@ -233,15 +395,182 @@ mod tests {
         assert_eq!(format_duration(Duration::from_millis(4321)), "4.3s");
     }
 
+    fn slot(name: &str, width: usize) -> Slot {
+        Slot {
+            indent: "",
+            name: pad(name, width),
+        }
+    }
+
     #[test]
     fn a_status_line_says_which_of_the_three_things_happened_without_colour() {
-        let done = status_line(&outcome("rust", Status::Done), 6, false);
-        let skip = status_line(&outcome("maven", skipped("mvn not found")), 6, false);
-        let fail = status_line(&outcome("go", Status::Failed { code: Some(1) }), 6, false);
+        let done = status_line(&outcome("rust", Status::Done), &slot("rust", 6), false);
+        let skip = status_line(
+            &outcome("maven", skipped("mvn not found")),
+            &slot("maven", 6),
+            false,
+        );
+        let fail = status_line(
+            &outcome("go", Status::Failed { code: Some(1) }),
+            &slot("go", 6),
+            false,
+        );
 
         assert_eq!(done, "✓ rust    120ms");
         assert_eq!(skip, "- maven   mvn not found");
         assert_eq!(fail, "✗ go      exit 1");
+    }
+
+    #[test]
+    fn steps_that_wait_are_indented_under_the_step_they_wait_for() {
+        let slots = layout(&[
+            Node {
+                name: "mise",
+                after: None,
+            },
+            Node {
+                name: "terraform",
+                after: Some("mise"),
+            },
+        ]);
+
+        assert_eq!(
+            slots,
+            [
+                Slot {
+                    indent: "",
+                    name: "mise       ".to_string(),
+                },
+                Slot {
+                    indent: INDENT,
+                    name: "terraform".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_tree_without_dependencies_is_flat() {
+        let slots = layout(&[
+            Node {
+                name: "go",
+                after: None,
+            },
+            Node {
+                name: "rust",
+                after: None,
+            },
+        ]);
+
+        assert!(slots.iter().all(|slot| slot.indent.is_empty()));
+        assert_eq!(slots[0].name, "go  ");
+    }
+
+    #[test]
+    fn a_tree_line_shows_each_state_of_a_step_without_colour() {
+        let slots = layout(&[
+            Node {
+                name: "mise",
+                after: None,
+            },
+            Node {
+                name: "rust",
+                after: Some("mise"),
+            },
+        ]);
+        let line = |slot: &Slot, row: Row<'_>| tree_line(slot, &row, "⠋", 80, false);
+        let done = outcome("rust", Status::Done);
+
+        assert_eq!(
+            line(
+                &slots[1],
+                Row::Waiting {
+                    after: Some("mise")
+                }
+            ),
+            "  ◌ rust  waiting for mise"
+        );
+        assert_eq!(
+            line(&slots[0], Row::Waiting { after: None }),
+            "◌ mise    queued"
+        );
+        assert_eq!(
+            line(
+                &slots[0],
+                Row::Running {
+                    elapsed: Duration::from_millis(14_600),
+                    activity: "installing node",
+                }
+            ),
+            "⠋ mise    14s  installing node"
+        );
+        let silent = Row::Running {
+            elapsed: Duration::from_secs(3),
+            activity: "",
+        };
+        assert_eq!(line(&slots[0], silent), "⠋ mise    3s");
+        assert!(
+            tree_line(
+                &slots[0],
+                &Row::Running {
+                    elapsed: Duration::from_secs(3),
+                    activity: "",
+                },
+                "⠋",
+                80,
+                true
+            )
+            .ends_with("3s\x1b[0m"),
+            "a step that has said nothing still drew a segment for it"
+        );
+        assert_eq!(line(&slots[1], Row::Finished(&done)), "  ✓ rust  120ms");
+    }
+
+    #[test]
+    fn a_running_line_never_outgrows_the_terminal() {
+        let slots = layout(&[Node {
+            name: "bun",
+            after: None,
+        }]);
+        let row = Row::Running {
+            elapsed: Duration::from_secs(3),
+            activity: "resolving 情報 packages from the registry",
+        };
+
+        for columns in [0, 10, 20, 30] {
+            let line = tree_line(&slots[0], &row, "⠋", columns, false);
+            assert!(
+                line.width() <= columns.max(10),
+                "{columns}: {line:?} is {} wide",
+                line.width()
+            );
+        }
+    }
+
+    #[test]
+    fn truncation_marks_the_cut_and_counts_cells() {
+        assert_eq!(truncate("abcdef", 6), "abcdef");
+        assert_eq!(truncate("abcdef", 4), "abc…");
+        assert_eq!(truncate("情報情報", 5), "情報…");
+        assert_eq!(truncate("abc", 0), "");
+    }
+
+    #[test]
+    fn activity_is_the_last_visible_frame_of_a_line() {
+        assert_eq!(activity("  fetching  "), Some("fetching".to_string()));
+        assert_eq!(activity("\x1b[32mdone\x1b[0m"), Some("done".to_string()));
+        assert_eq!(activity("10%\r50%\r"), Some("50%".to_string()));
+        assert_eq!(
+            activity("\x1b]8;;https://x\x07link\x1b]8;;\x1b\\"),
+            Some("link".to_string())
+        );
+    }
+
+    #[test]
+    fn blank_output_is_not_activity() {
+        assert_eq!(activity(""), None);
+        assert_eq!(activity("   \r  "), None);
+        assert_eq!(activity("\x1b[2K"), None);
     }
 
     #[test]
@@ -319,7 +648,7 @@ mod tests {
 
     #[test]
     fn colour_wraps_a_row_without_changing_what_it_says() {
-        let line = status_line(&outcome("rust", Status::Done), 4, true);
+        let line = status_line(&outcome("rust", Status::Done), &slot("rust", 4), true);
         assert!(line.contains("\x1b["), "nothing was coloured");
         assert!(line.contains("rust"), "{line}");
     }
