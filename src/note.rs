@@ -1486,25 +1486,41 @@ const LINE_COLOR: u8 = 3;
 
 // --- new notes --------------------------------------------------------------
 
-/// The name a new note takes when the user did not give one: the local date and
-/// time, to the minute.
+/// The file a note called `title` is started in on the day `now` falls on:
+/// `YYYY-MM-DD-<slug>.md`, in local time.
 ///
-/// A name rather than a prompt, because being asked to name a note is being
-/// asked what it is about before writing it — and a note that has to be named
-/// first is one that does not get written. It sorts, it is unique to the
-/// minute, and renaming it afterwards is what an editor is for.
-pub fn generated_name(now: i64, offset: time::UtcOffset) -> String {
-    let Some(dt) = local(now, offset) else {
-        return "note.md".to_string();
-    };
-    format!(
-        "{:04}-{:02}-{:02}-{:02}{:02}.md",
-        dt.year(),
-        dt.month() as u8,
-        dt.day(),
-        dt.hour(),
-        dt.minute(),
-    )
+/// The date leads so a directory listing is a timeline, and the slug follows
+/// so the name still says what the note is about. A title with nothing in it a
+/// slug can use is named for the day alone.
+pub fn titled_name(title: &str, now: i64, offset: time::UtcOffset) -> String {
+    let day = date(now, offset);
+    match slug(title).as_str() {
+        "" => format!("{day}.md"),
+        slug => format!("{day}-{slug}.md"),
+    }
+}
+
+/// `title` in kebab case: lowercase words joined by `-`.
+///
+/// Anything that is not a letter or a digit separates words, so a `/` in a
+/// title cannot become a directory. Apostrophes are dropped instead, which
+/// keeps `Don't` one word. Letters outside ASCII are kept rather than
+/// transliterated.
+pub fn slug(title: &str) -> String {
+    title
+        .chars()
+        .filter(|c| !matches!(c, '\'' | '\u{2019}'))
+        .flat_map(char::to_lowercase)
+        .map(|c| if c.is_alphanumeric() { c } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+/// What a new note's file starts with: its title, as the one H1.
+pub fn heading(title: &str) -> String {
+    format!("# {}\n", title.trim())
 }
 
 /// A name nothing is using yet: `name`, else `name-2`, `name-3` and so on.
@@ -1649,15 +1665,38 @@ mod search_tests {
 
     // --- new notes ---
 
-    /// Sortable, and unique to the minute — which is what lets a note be
-    /// started without first being named.
     #[test]
-    fn a_generated_name_is_the_date_and_time() {
-        assert_eq!(generated_name(0, utc()), "1970-01-01-0000.md");
+    fn a_titled_name_is_the_date_then_the_title_in_kebab_case() {
+        let sept_23 = 1_790_121_600;
         assert_eq!(
-            generated_name(3 * 3600 + 25 * 60, utc()),
-            "1970-01-01-0325.md"
+            titled_name("Migrate to AWS", sept_23, utc()),
+            "2026-09-23-migrate-to-aws.md"
         );
+    }
+
+    #[test]
+    fn a_title_with_nothing_to_slug_is_named_for_the_day() {
+        assert_eq!(titled_name("  ?! ", 0, utc()), "1970-01-01.md");
+    }
+
+    #[test]
+    fn a_slug_joins_words_on_single_hyphens() {
+        let cases = [
+            ("Migrate to AWS", "migrate-to-aws"),
+            ("  CI/CD -- pipeline  ", "ci-cd-pipeline"),
+            ("Don't panic", "dont-panic"),
+            ("It\u{2019}s v2.0", "its-v2-0"),
+            ("Møte med Åse", "møte-med-åse"),
+            ("", ""),
+        ];
+        for (title, want) in cases {
+            assert_eq!(slug(title), want, "{title:?}");
+        }
+    }
+
+    #[test]
+    fn a_heading_is_the_trimmed_title_as_an_h1() {
+        assert_eq!(heading(" Migrate to AWS "), "# Migrate to AWS\n");
     }
 
     #[test]

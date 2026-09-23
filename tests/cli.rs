@@ -2238,54 +2238,62 @@ fn config_check_reports_an_archive_that_is_not_there() {
     assert!(run.stdout.contains("work/archive"), "{}", run.stdout);
 }
 
-/// `note new` hands the editor a path nobody had to be asked for, and does not
-/// create the file — an abandoned note is one that never existed.
+/// The path `note new` handed the editor, from the `echo` the sandbox's vault
+/// uses as one.
+fn opened(run: &Run) -> PathBuf {
+    PathBuf::from(run.stdout.trim().strip_prefix("-- ").expect("a path"))
+}
+
 #[test]
-fn note_new_opens_a_note_it_named_itself() {
+fn note_new_names_the_note_for_the_day_and_its_title_and_writes_the_title_as_its_h1() {
     let sandbox = Sandbox::new();
     let vault = mk_vault(&sandbox);
-    let run = sandbox.run(&["note", "new"]);
+    let run = sandbox.run(&["note", "new", "Migrate to AWS"]);
     run.ok();
 
-    let opened = run
-        .stdout
-        .trim()
-        .strip_prefix("-- ")
-        .expect("a path")
-        .to_string();
-    assert!(opened.starts_with(vault.to_str().unwrap()), "{opened}");
-    assert!(opened.ends_with(".md"), "{opened}");
+    let opened = opened(&run);
+    assert_eq!(opened.parent(), Some(vault.as_path()), "{opened:?}");
+    let name = opened.file_name().unwrap().to_str().unwrap();
+    let (day, rest) = name.split_at(10);
     assert!(
-        !Path::new(&opened).exists(),
-        "note new created the file the editor was going to write: {opened}"
+        day.chars().all(|c| c.is_ascii_digit() || c == '-'),
+        "{name}"
     );
-}
-
-#[test]
-fn note_new_takes_a_name_and_makes_the_directory_it_asks_for() {
-    let sandbox = Sandbox::new();
-    let vault = mk_vault(&sandbox);
-    let run = sandbox.run(&["note", "new", "journal/today"]);
-    run.ok();
+    assert_eq!(rest, "-migrate-to-aws.md");
     assert_eq!(
-        run.stdout.trim(),
-        format!("-- {}", vault.join("journal/today.md").display())
+        std::fs::read_to_string(&opened).unwrap(),
+        "# Migrate to AWS\n"
     );
-    assert!(vault.join("journal").is_dir(), "the directory was not made");
 }
 
-/// Two notes started in the same minute is not an error, and neither is one
-/// name typed twice.
+/// One title typed twice is a second note, never the first one reopened.
 #[test]
 fn note_new_never_hands_back_a_name_already_in_use() {
     let sandbox = Sandbox::new();
-    let vault = mk_vault(&sandbox);
-    let run = sandbox.run(&["note", "new", "inbox"]);
-    run.ok();
+    mk_vault(&sandbox);
+    let first = sandbox.run(&["note", "new", "Standup"]);
+    first.ok();
+    let second = sandbox.run(&["note", "new", "Standup"]);
+    second.ok();
+
+    let first = opened(&first);
+    let second = opened(&second);
     assert_eq!(
-        run.stdout.trim(),
-        format!("-- {}", vault.join("inbox-2.md").display())
+        second.to_str().unwrap(),
+        first.to_str().unwrap().replace(".md", "-2.md")
     );
+}
+
+/// Without a title the command asks for one, and a script has no way to answer.
+#[test]
+fn note_new_without_a_title_or_a_terminal_fails_and_creates_nothing() {
+    let sandbox = Sandbox::new();
+    let vault = mk_vault(&sandbox);
+    let before = std::fs::read_dir(&vault).unwrap().count();
+    let run = sandbox.run(&["note", "new"]);
+    run.code(1);
+    assert!(run.stderr.contains("TITLE"), "{}", run.stderr);
+    assert_eq!(std::fs::read_dir(&vault).unwrap().count(), before);
 }
 
 #[test]

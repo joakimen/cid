@@ -15,7 +15,7 @@ use anyhow::{Context, Result, bail};
 use crate::note::{self, Note, Widths};
 use crate::path::expand_home_dir;
 use crate::select::{Preview, SelectItem};
-use crate::{Ctx, cmd, select, stats, term};
+use crate::{Ctx, cmd, prompt, select, stats, term};
 
 /// How much of a note is read to find its front matter.
 ///
@@ -310,51 +310,46 @@ fn item(
     }
 }
 
-/// `cid note new [NAME]` — start a note and open it.
+/// `cid note new [TITLE]` — start a note called `TITLE` and open it.
 ///
-/// No question is asked first. Being asked to name a note is being asked what
-/// it is about before writing it, and a note that has to be named before it can
-/// be started is one that does not get started; the generated name sorts, and
-/// renaming it afterwards is what the editor is already open for.
-///
-/// The file is not created here — the editor writes it, or nothing does. An
-/// abandoned note is then a note that never existed rather than an empty one in
-/// every listing from now on.
-pub fn new(ctx: &Ctx, name: Option<&str>) -> Result<()> {
+/// With no title, one is asked for, with the filename it will produce drawn
+/// beneath it as it is typed. The note is `YYYY-MM-DD-<title-in-kebab-case>.md`
+/// at the top of the vault, and starts as the title for its H1 — which leaves
+/// a note abandoned there a heading and nothing else, what `note cleanup`
+/// offers as empty.
+pub fn new(ctx: &Ctx, title: Option<&str>) -> Result<()> {
     let editor = ctx.note_editor()?;
     let root = vault(ctx)?;
-
-    let named = match name {
-        Some(name) => with_extension(name),
-        None => note::generated_name(crate::unix_now(), ctx.utc_offset()),
+    let (now, offset) = (crate::unix_now(), ctx.utc_offset());
+    let file_for = |title: &str| {
+        note::free_name(&note::titled_name(title, now, offset), |candidate| {
+            root.join(candidate).exists()
+        })
     };
-    let path = PathBuf::from(resolve(&root, ctx.home(), &named));
 
-    let dir = path.parent().unwrap_or(&root).to_path_buf();
-    let file = path
-        .file_name()
-        .map(|f| f.to_string_lossy().into_owned())
-        .unwrap_or_else(|| named.clone());
-    let file = note::free_name(&file, |candidate| dir.join(candidate).exists());
+    let title =
+        match title.map(str::trim) {
+            Some("") => bail!("a note's title cannot be blank"),
+            Some(title) => title.to_string(),
+            None => prompt::ask("Title", "File", file_for, ctx.color()).map_err(|e| {
+                match e.is::<select::Cancelled>() {
+                    true => e,
+                    false => e.context("no TITLE given and no terminal to ask for one"),
+                }
+            })?,
+        };
+    let path = root.join(file_for(&title));
 
-    // The editor cannot write into a directory that is not there, and a name
-    // with a `/` in it is a request for one.
-    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .and_then(|mut file| std::io::Write::write_all(&mut file, note::heading(&title).as_bytes()))
+        .with_context(|| format!("creating {}", path.display()))?;
 
-    let target = dir.join(file).to_string_lossy().into_owned();
+    let target = path.to_string_lossy().into_owned();
     ctx.log.info(&format!("new note at {target}"));
     cmd::edit::launch(ctx, &editor, std::slice::from_ref(&target))
-}
-
-/// Give a name the extension a listing looks for, unless it already has one of
-/// its own. A name with no dot in it is a name; one with a dot has been spelled
-/// out and is left as typed.
-fn with_extension(name: &str) -> String {
-    let last = name.rsplit('/').next().unwrap_or(name);
-    match last.contains('.') {
-        true => name.to_string(),
-        false => format!("{name}.md"),
-    }
 }
 
 /// `cid note scratch` — open the one note that is filed nowhere.
@@ -1049,17 +1044,6 @@ mod tests {
         let note = read_note(&path, dir.path(), utc()).unwrap();
 
         assert!(note.created <= note.modified, "{note:?}");
-    }
-
-    #[test]
-    fn a_name_gains_the_extension_a_listing_looks_for() {
-        assert_eq!(with_extension("standup"), "standup.md");
-        assert_eq!(with_extension("work/standup"), "work/standup.md");
-        // Spelled out already, and left as typed.
-        assert_eq!(with_extension("standup.md"), "standup.md");
-        assert_eq!(with_extension("notes.v2.txt"), "notes.v2.txt");
-        // The dot is in a directory, not in the name.
-        assert_eq!(with_extension("v1.2/standup"), "v1.2/standup.md");
     }
 
     fn vault() -> Vec<Note> {

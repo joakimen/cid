@@ -449,21 +449,17 @@ enum NoteCmd {
         #[arg(short = 'a', long)]
         all: bool,
     },
-    /// Start a note and open it straight away
+    /// Start a note from a title and open it
     ///
-    /// No question is asked first: with no NAME the note is called after the
-    /// date and time, to the minute, and renaming it is what the editor is
-    /// already open for. A NAME with a `/` in it names a directory below the
-    /// vault, which is created if it is not there, and one with no `.` in it
-    /// gains `.md`.
-    ///
-    /// The file itself is left for the editor to write, so a note started and
-    /// abandoned is one that never existed rather than an empty one in every
-    /// listing after it.
+    /// With no TITLE, one is asked for, and the filename it makes is shown
+    /// beneath it as it is typed. The note is created at the top of the vault
+    /// as `YYYY-MM-DD-<title-in-kebab-case>.md`, holding the title as its H1 —
+    /// `Migrate to AWS` becomes `2026-09-23-migrate-to-aws.md`. A name already
+    /// taken gains `-2`, `-3` and so on.
     New {
-        /// What to call it; omit for the date and time
-        #[arg(value_name = "NAME")]
-        name: Option<String>,
+        /// The note's title; omit to be asked for one
+        #[arg(value_name = "TITLE")]
+        title: Option<String>,
     },
     /// Open the one permanent scratch note
     ///
@@ -1061,7 +1057,7 @@ fn dispatch(ctx: &Ctx, command: Command) -> anyhow::Result<()> {
             NoteCmd::Ls { status, all } => cmd::note::ls(ctx, status, all),
             NoteCmd::Sel { all } => cmd::note::sel(ctx, all),
             NoteCmd::Open { notes, all } => cmd::note::open(ctx, &notes, all),
-            NoteCmd::New { name } => cmd::note::new(ctx, name.as_deref()),
+            NoteCmd::New { title } => cmd::note::new(ctx, title.as_deref()),
             NoteCmd::Scratch => cmd::note::scratch(ctx),
             NoteCmd::Cleanup { yes, all } => cmd::note::cleanup(ctx, yes, all),
         },

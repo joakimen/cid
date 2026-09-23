@@ -243,6 +243,7 @@ dependencies = [
  "anyhow",
  "clap",
  "clap_complete",
+ "crossterm",
  "ignore",
  "indexmap",
  "ratatui",
