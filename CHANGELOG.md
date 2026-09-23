@@ -13,6 +13,10 @@ raised, never by hand.
 
 ## Unreleased
 
+## v0.24.0
+
+*Released 2026-09-23*
+
 ### Added
 
 - **`cid note daily`** opens today's note, `daily/2026-09-23.md`, starting it
