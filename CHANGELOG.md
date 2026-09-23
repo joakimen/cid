@@ -13,6 +13,10 @@ raised, never by hand.
 
 ## Unreleased
 
+## v0.23.0
+
+*Released 2026-09-23*
+
 ### Changed
 
 - **`cid note new`** takes a title instead of a filename. Without one it asks
