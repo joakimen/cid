@@ -451,16 +451,23 @@ enum NoteCmd {
     },
     /// Start a note from a title and open it
     ///
-    /// With no TITLE, one is asked for, and the filename it makes is shown
-    /// beneath it as it is typed. The note is created at the top of the vault
-    /// as `YYYY-MM-DD-<title-in-kebab-case>.md`, holding the title as its H1 —
-    /// `Migrate to AWS` becomes `2026-09-23-migrate-to-aws.md`. A name already
-    /// taken gains `-2`, `-3` and so on.
+    /// With no TITLE, one is asked for, and the path it makes is shown beneath
+    /// it as it is typed. The note is created under `[note] inbox` as
+    /// `<title-in-kebab-case>.md` — `Migrate to AWS` becomes
+    /// `inbox/migrate-to-aws.md` — with today's date as `created:` in its front
+    /// matter and the title as its H1. A name already taken gains `-2`, `-3`
+    /// and so on.
     New {
         /// The note's title; omit to be asked for one
         #[arg(value_name = "TITLE")]
         title: Option<String>,
     },
+    /// Open today's note, starting it if there is none yet
+    ///
+    /// One note per day, `YYYY-MM-DD.md` under `[note] daily`, started with
+    /// today's date as `created:` in its front matter and `# Daily -
+    /// YYYY-MM-DD` as its H1. Run again the same day, it opens that note.
+    Daily,
     /// Open the one permanent scratch note
     ///
     /// Somewhere to put a thought without first deciding whether it is worth a
@@ -1058,6 +1065,7 @@ fn dispatch(ctx: &Ctx, command: Command) -> anyhow::Result<()> {
             NoteCmd::Sel { all } => cmd::note::sel(ctx, all),
             NoteCmd::Open { notes, all } => cmd::note::open(ctx, &notes, all),
             NoteCmd::New { title } => cmd::note::new(ctx, title.as_deref()),
+            NoteCmd::Daily => cmd::note::daily(ctx),
             NoteCmd::Scratch => cmd::note::scratch(ctx),
             NoteCmd::Cleanup { yes, all } => cmd::note::cleanup(ctx, yes, all),
         },

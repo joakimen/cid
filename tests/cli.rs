@@ -2244,26 +2244,72 @@ fn opened(run: &Run) -> PathBuf {
     PathBuf::from(run.stdout.trim().strip_prefix("-- ").expect("a path"))
 }
 
+/// A note's text is `created:` front matter naming a day, a blank line, then
+/// `# <title>` — returned as the day and what follows it.
+fn dated(text: &str) -> (&str, &str) {
+    let rest = text.strip_prefix("---\ncreated: ").expect(text);
+    let (day, rest) = rest.split_at(10);
+    assert!(
+        day.chars().all(|c| c.is_ascii_digit() || c == '-'),
+        "{text}"
+    );
+    (day, rest.strip_prefix("\n---\n\n").expect(text))
+}
+
 #[test]
-fn note_new_names_the_note_for_the_day_and_its_title_and_writes_the_title_as_its_h1() {
+fn note_new_starts_a_dated_note_named_for_its_title_in_the_inbox() {
     let sandbox = Sandbox::new();
     let vault = mk_vault(&sandbox);
     let run = sandbox.run(&["note", "new", "Migrate to AWS"]);
     run.ok();
 
     let opened = opened(&run);
-    assert_eq!(opened.parent(), Some(vault.as_path()), "{opened:?}");
-    let name = opened.file_name().unwrap().to_str().unwrap();
-    let (day, rest) = name.split_at(10);
-    assert!(
-        day.chars().all(|c| c.is_ascii_digit() || c == '-'),
-        "{name}"
-    );
-    assert_eq!(rest, "-migrate-to-aws.md");
+    assert_eq!(opened, vault.join("inbox/migrate-to-aws.md"));
+    let text = std::fs::read_to_string(&opened).unwrap();
+    assert_eq!(dated(&text).1, "# Migrate to AWS\n");
+}
+
+#[test]
+fn note_new_and_note_daily_file_into_the_directories_the_config_names() {
+    let sandbox = Sandbox::new();
+    let vault = mk_vault(&sandbox);
+    sandbox.write_config(&format!(
+        "[note]\nroot = {:?}\neditor = \"echo\"\ninbox = \"work/inbox\"\ndaily = \"personal/daily\"\n",
+        vault.display().to_string()
+    ));
+
+    let new = sandbox.run(&["note", "new", "Standup"]);
+    new.ok();
+    assert_eq!(opened(&new), vault.join("work/inbox/standup.md"));
+
+    let daily = sandbox.run(&["note", "daily"]);
+    daily.ok();
     assert_eq!(
-        std::fs::read_to_string(&opened).unwrap(),
-        "# Migrate to AWS\n"
+        opened(&daily).parent(),
+        Some(vault.join("personal/daily").as_path())
     );
+}
+
+/// One note per day: the second run of the day reopens the first run's note
+/// rather than starting another or writing over it.
+#[test]
+fn note_daily_starts_todays_note_once_and_reopens_it_after() {
+    let sandbox = Sandbox::new();
+    let vault = mk_vault(&sandbox);
+    let first = sandbox.run(&["note", "daily"]);
+    first.ok();
+
+    let path = opened(&first);
+    let text = std::fs::read_to_string(&path).unwrap();
+    let (day, body) = dated(&text);
+    assert_eq!(path, vault.join(format!("daily/{day}.md")));
+    assert_eq!(body, format!("# Daily - {day}\n"));
+
+    std::fs::write(&path, "written since\n").unwrap();
+    let second = sandbox.run(&["note", "daily"]);
+    second.ok();
+    assert_eq!(opened(&second), path);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "written since\n");
 }
 
 /// One title typed twice is a second note, never the first one reopened.

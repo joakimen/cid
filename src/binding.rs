@@ -89,6 +89,12 @@ pub const ACTIONS: &[Action] = &[
         kind: Kind::Run,
     },
     Action {
+        id: "note-daily",
+        description: "Open today's note, starting it if there is none yet",
+        args: &["note", "daily"],
+        kind: Kind::Run,
+    },
+    Action {
         id: "branch-checkout",
         description: "Select a git branch and check it out",
         args: &["branch", "checkout"],
@@ -164,7 +170,7 @@ pub const ACTIONS: &[Action] = &[
 /// because users' own tools cluster there. ctrl-f7 displaces nothing in fish,
 /// but macOS takes Control-F7 for "Change the way Tab moves focus" until that
 /// shortcut is turned off under System Settings → Keyboard → Keyboard
-/// Shortcuts → Keyboard.
+/// Shortcuts → Keyboard. ctrl-f10 displaces nothing in fish either.
 pub const EXAMPLE_BINDINGS: &[(&str, &str)] = &[
     ("ctrl-o", "repo-cd"),
     ("ctrl-t", "worktree-cd"),
@@ -175,6 +181,7 @@ pub const EXAMPLE_BINDINGS: &[(&str, &str)] = &[
     ("f7", "pr-checkout"),
     ("ctrl-f7", "pr-worktree-cd"),
     ("f10", "note-edit"),
+    ("ctrl-f10", "note-daily"),
     ("ctrl-r", "history-select"),
     ("up", "history-up"),
 ];

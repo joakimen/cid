@@ -13,6 +13,21 @@ raised, never by hand.
 
 ## Unreleased
 
+### Added
+
+- **`cid note daily`** opens today's note, `daily/2026-09-23.md`, starting it
+  with a `# Daily - 2026-09-23` heading the first time it runs that day.
+  `[note] daily` moves the folder, and the `note-daily` action binds it —
+  the starter config suggests `ctrl-f10`. `note cleanup` no longer offers a
+  daily note just because its name is a date.
+
+### Changed
+
+- **`cid note new`** drops the date from the filename: `Migrate to AWS` is now
+  `inbox/migrate-to-aws.md`. Notes go under `[note] inbox`, `inbox` unless set,
+  and the date moves into a `created:` line in the note's front matter, which
+  `note ls` and the selector already read.
+
 ## v0.23.0
 
 *Released 2026-09-23*

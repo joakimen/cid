@@ -223,6 +223,12 @@ pub struct NoteConfig {
     /// The one permanent note `note scratch` opens, as a path below
     /// [`Self::root`]. Unset, it is `scratch/scratch.md`.
     pub scratch: Option<String>,
+    /// Where `note new` starts a note, as a directory below [`Self::root`].
+    /// Unset, it is `inbox`.
+    pub inbox: Option<String>,
+    /// Where `note daily` keeps one note per day, as a directory below
+    /// [`Self::root`]. Unset, it is `daily`.
+    pub daily: Option<String>,
     /// What `note open` launches, split on whitespace like `$EDITOR`. Unset, it
     /// is `$VISUAL` then `$EDITOR`.
     ///
@@ -233,6 +239,16 @@ pub struct NoteConfig {
 }
 
 impl NoteConfig {
+    /// [`Self::inbox`], or its default.
+    pub fn inbox_dir(&self) -> &str {
+        self.inbox.as_deref().unwrap_or(crate::note::DEFAULT_INBOX)
+    }
+
+    /// [`Self::daily`], or its default.
+    pub fn daily_dir(&self) -> &str {
+        self.daily.as_deref().unwrap_or(crate::note::DEFAULT_DAILY)
+    }
+
     /// The label the directory `dir` carries, or `None` when it has none.
     /// Matched case-insensitively, as a directory name is on Darwin.
     pub fn label_of(&self, dir: &str) -> Option<&str> {
