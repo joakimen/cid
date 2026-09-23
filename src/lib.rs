@@ -19,6 +19,7 @@ pub mod note;
 pub mod path;
 pub mod proc;
 pub mod project;
+pub mod prompt;
 pub mod recent;
 pub mod repo;
 pub mod select;

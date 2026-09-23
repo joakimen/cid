@@ -13,6 +13,15 @@ raised, never by hand.
 
 ## Unreleased
 
+### Changed
+
+- **`cid note new`** takes a title instead of a filename. Without one it asks
+  for it, showing the filename it will make as you type. The note is created
+  at the top of the vault as `2026-09-23-migrate-to-aws.md`, starting with
+  the title as its heading, and opened in `[note] editor`. A name no longer
+  picks a directory or an extension, and running it with no argument outside
+  a terminal is now an error rather than a note named for the time.
+
 ## v0.22.1
 
 *Released 2026-09-18*
