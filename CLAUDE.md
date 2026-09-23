@@ -156,7 +156,7 @@ Rationale for code that does is a doc comment at the site — `ScratchRow`,
   Prefer `Preview::Text` from data in hand — hence PR bodies from `gh pr list`
   rather than `gh pr view`. A `Preview::Command` must be local, bounded, built
   through `select::quote`, and `--no-optional-locks` if it is git.
-- **A new dependency on the outside world gets a `config check` row** in
+- **A new dependency on the outside world gets a `doctor` row** in
   `cmd/config.rs`. `Fail` only when cid is genuinely broken without it, and
   skip a check that repeats an earlier one.
 - **A new setting gets a `config print` row**, under the table it is written

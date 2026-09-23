@@ -974,7 +974,7 @@ fn which(program: &str) -> Option<PathBuf> {
     })
 }
 
-/// The `config check` row for the vault: where it is, how much is in it, and
+/// The `doctor` row for the vault: where it is, how much is in it, and
 /// how much of that a listing leaves out. One row rather than two, since a root
 /// that resolves and holds nothing has already been reported by the count.
 pub(crate) fn vault_summary(ctx: &Ctx) -> Result<Vault> {
@@ -1001,7 +1001,7 @@ pub(crate) fn vault_summary(ctx: &Ctx) -> Result<Vault> {
     })
 }
 
-/// What `config check` found in the vault.
+/// What `doctor` found in the vault.
 pub(crate) struct Vault {
     pub root: PathBuf,
     /// Notes a listing shows.

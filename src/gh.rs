@@ -1060,7 +1060,7 @@ pub fn owners() -> Result<Vec<String>> {
 /// token against the host, so this catches an expired or revoked one as well as
 /// no login at all.
 ///
-/// A network round trip, and therefore for `config check` alone — nothing on a
+/// A network round trip, and therefore for `doctor` alone — nothing on a
 /// keystroke path may ask this.
 pub fn authenticated() -> bool {
     let _child = stats::in_child();

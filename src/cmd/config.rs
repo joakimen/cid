@@ -117,7 +117,7 @@ ignore = ["node_modules", "target"]
 # same configuration serves fish and any shell cid later learns to write for.
 # Between them the two tables below name every action there is. `cid config
 # actions` lists them all with whatever is bound to each, `cid config print`
-# lists the keys and names you have, and `cid config check` says whether they
+# lists the keys and names you have, and `cid doctor` says whether they
 # resolve.
 #
 # cid binds nothing on its own. The two tables below are suggestions, and
@@ -602,7 +602,7 @@ fn pad(text: &str, width: usize) -> String {
 /// `cid config print` — every setting there is, and what is in force for it.
 ///
 /// The settings only: whether the paths they name exist, and whether the tools
-/// cid shells out to are installed, is `cid config check`.
+/// cid shells out to are installed, is `cid doctor`.
 pub fn print(ctx: &Ctx) -> Result<()> {
     ctx.log.info(&format!(
         "printing configuration from {}",
@@ -1165,7 +1165,7 @@ fn files_check(ctx: &Ctx) -> Check {
     }
 }
 
-/// Everything `config check` looks at, in the order it is reported: what the
+/// Everything `doctor` looks at, in the order it is reported: what the
 /// configuration points at, then the programs cid shells out to, then the
 /// files it keeps.
 fn collect(ctx: &Ctx) -> Vec<Section> {
@@ -1241,7 +1241,7 @@ fn collect(ctx: &Ctx) -> Vec<Section> {
     ]
 }
 
-/// `cid config check` — look at everything cid depends on in one go and say
+/// `cid doctor` — look at everything cid depends on in one go and say
 /// what is wrong with it. The exit status is non-zero only when something is
 /// genuinely broken, so it is worth putting in a setup script.
 ///

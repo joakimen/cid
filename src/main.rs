@@ -5,7 +5,8 @@
 //! Top-level commands: `repo`, `file`, `note`, `branch`, `worktree`, `pr`,
 //! `ps` and `history` work with the things cid finds; `edit` opens a file
 //! from the directory the user is in and `project` builds it; `config` manages
-//! its configuration; `init` prints shell integration.
+//! its configuration and `doctor` checks what it points at; `init` prints shell
+//! integration.
 
 use std::process::ExitCode;
 
@@ -242,6 +243,21 @@ enum Command {
         #[command(subcommand)]
         command: ConfigCmd,
     },
+    /// Check everything cid depends on and report what is wrong
+    ///
+    /// A checklist: the config file, the paths it names, the repositories
+    /// discovery actually finds, your editor, `git`, `gh` and whether it is
+    /// still logged in, fish's history file, the tracked-file list and the
+    /// notes vault — each a line, with what to do about the ones that are
+    /// wrong. Exits non-zero only when something is genuinely broken, so it is
+    /// worth putting in a setup script; a warning still leaves cid working.
+    ///
+    /// What each setting is set to is `config print`; a row here repeats a
+    /// value only where repeating it is the way out of a problem.
+    ///
+    /// The login is asked of GitHub, so this is the one command here that waits
+    /// on the network.
+    Doctor,
     /// What you run, how often, and how long it takes
     ///
     /// Every run appends one line to a log — the command, and how long it took
@@ -264,7 +280,7 @@ enum Command {
     /// `[shell.aliases]`, which name actions rather than shell code. cid
     /// binds nothing on its own: `cid config init` writes a suggested set out
     /// commented, and until a table is written nothing is bound. `cid config
-    /// actions` lists every action there is to name, and `cid config check`
+    /// actions` lists every action there is to name, and `cid doctor`
     /// says whether yours resolve; a configuration that will not parse,
     /// or that names an action cid does not define, stops this command rather
     /// than emitting a shell where one key silently does nothing.
@@ -900,7 +916,7 @@ enum ConfigCmd {
     /// each one runs and what that action does; there are none until the file
     /// names some.
     ///
-    /// Whether what the settings point at is actually there is `config check`.
+    /// Whether what the settings point at is actually there is `doctor`.
     Print,
     /// List every action a key binding or alias can name
     ///
@@ -913,21 +929,6 @@ enum ConfigCmd {
     Actions,
     /// Print the configuration file path
     Path,
-    /// Check everything cid depends on and report what is wrong
-    ///
-    /// A checklist: the config file, the paths it names, the repositories
-    /// discovery actually finds, your editor, `git`, `gh` and whether it is
-    /// still logged in, fish's history file, the tracked-file list and the
-    /// notes vault — each a line, with what to do about the ones that are
-    /// wrong. Exits non-zero only when something is genuinely broken, so it is
-    /// worth putting in a setup script; a warning still leaves cid working.
-    ///
-    /// What each setting is set to is `config print`; a row here repeats a
-    /// value only where repeating it is the way out of a problem.
-    ///
-    /// The login is asked of GitHub, so this is the one command here that waits
-    /// on the network.
-    Check,
 }
 
 #[derive(Subcommand)]
@@ -1150,12 +1151,12 @@ fn dispatch(ctx: &Ctx, command: Command) -> anyhow::Result<()> {
             ProjectCmd::Deps { dry_run, dump } => cmd::project::deps(ctx, dry_run, dump),
             ProjectCmd::Build { dry_run } => cmd::project::build(ctx, dry_run),
         },
+        Command::Doctor => cmd::config::check(ctx),
         Command::Config { command } => match command {
             ConfigCmd::Init { force } => cmd::config::init(ctx, force),
             ConfigCmd::Print => cmd::config::print(ctx),
             ConfigCmd::Actions => cmd::config::actions(ctx),
             ConfigCmd::Path => cmd::config::path(ctx),
-            ConfigCmd::Check => cmd::config::check(ctx),
         },
         // The tree these report on is the clap command itself, which is the
         // only place that knows every command there is.

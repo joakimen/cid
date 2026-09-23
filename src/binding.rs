@@ -249,7 +249,7 @@ pub fn resolve(config: &ShellConfig) -> Result<Integration> {
 ///
 /// Unlike [`resolve`], an action nobody defines is kept rather than refused:
 /// `cid config print` reports a line the file really has, and leaves calling
-/// it broken to `cid config check`.
+/// it broken to `cid doctor`.
 pub fn entries(table: Option<&Bindings>) -> Vec<(&str, &str)> {
     table
         .into_iter()
@@ -273,7 +273,7 @@ pub struct Assignment<'a> {
 /// the ones that are still free is what the list is for.
 ///
 /// A line naming an action cid does not define belongs to no row here;
-/// `cid config check` is where that is reported.
+/// `cid doctor` is where that is reported.
 pub fn assignments(config: &ShellConfig) -> Vec<Assignment<'_>> {
     let bindings = entries(config.bindings.as_ref());
     let aliases = entries(config.aliases.as_ref());
@@ -531,7 +531,7 @@ mod tests {
         assert!(row("proc-kill").keys.is_empty());
     }
 
-    /// Reporting a line that names nothing is `config check`'s job; here it
+    /// Reporting a line that names nothing is `doctor`'s job; here it
     /// would be a row for an action that does not exist.
     #[test]
     fn a_line_naming_no_action_adds_no_row() {

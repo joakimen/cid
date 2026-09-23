@@ -27,6 +27,8 @@ raised, never by hand.
   `inbox/migrate-to-aws.md`. Notes go under `[note] inbox`, `inbox` unless set,
   and the date moves into a `created:` line in the note's front matter, which
   `note ls` and the selector already read.
+- **`cid config check` is now `cid doctor`.** The report is unchanged; the
+  old spelling is gone, so a setup script that runs it needs the new name.
 
 ## v0.23.0
 

@@ -54,7 +54,7 @@ pub fn ls(ctx: &Ctx, status: bool, missing: bool, exists: bool) -> Result<()> {
 
 /// A file with its existence marked: green tick for there, red cross for gone.
 /// Shared by `file ls --status` and `file prune`, and the same glyphs and
-/// colour indices `config check` marks a passing and a failing row with.
+/// colour indices `doctor` marks a passing and a failing row with.
 fn status_row(path: &str, present: bool, color: bool) -> String {
     let (glyph, tint) = if present { ("✓", 2) } else { ("✗", 1) };
     term::paint(&format!("{glyph} {path}"), tint, color)
