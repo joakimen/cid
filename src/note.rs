@@ -1113,9 +1113,12 @@ mod tests {
     #[test]
     fn a_note_with_nothing_in_it_is_a_candidate() {
         let note = note("thoughts.md", Front::default());
-        assert_eq!(junk(&note, "", scratch()), Some(Junk::Empty));
-        assert_eq!(junk(&note, "# Thoughts\n", scratch()), Some(Junk::Empty));
-        assert_eq!(junk(&note, &body_of(20), scratch()), None);
+        assert_eq!(junk(&note, "", scratch(), "daily"), Some(Junk::Empty));
+        assert_eq!(
+            junk(&note, "# Thoughts\n", scratch(), "daily"),
+            Some(Junk::Empty)
+        );
+        assert_eq!(junk(&note, &body_of(20), scratch(), "daily"), None);
     }
 
     /// What an editor calls a file nobody named, and everything it goes on to
@@ -1130,7 +1133,7 @@ mod tests {
         ] {
             let note = note(name, Front::default());
             assert_eq!(
-                junk(&note, &body_of(20), scratch()),
+                junk(&note, &body_of(20), scratch(), "daily"),
                 Some(Junk::Untitled),
                 "{name}"
             );
@@ -1138,7 +1141,11 @@ mod tests {
         // Not every name that begins with the word.
         for name in ["Untitled thoughts.md", "untitledness.md"] {
             let note = note(name, Front::default());
-            assert_eq!(junk(&note, &body_of(20), scratch()), None, "{name}");
+            assert_eq!(
+                junk(&note, &body_of(20), scratch(), "daily"),
+                None,
+                "{name}"
+            );
         }
     }
 
@@ -1147,7 +1154,10 @@ mod tests {
     #[test]
     fn a_note_named_only_by_numbers_is_a_candidate_unless_it_says_otherwise() {
         let jotted = note("2026-08-25 1043.md", Front::default());
-        assert_eq!(junk(&jotted, &body_of(20), scratch()), Some(Junk::Unnamed));
+        assert_eq!(
+            junk(&jotted, &body_of(20), scratch(), "daily"),
+            Some(Junk::Unnamed)
+        );
 
         let titled = note(
             "2026-08-25 1043.md",
@@ -1156,7 +1166,20 @@ mod tests {
                 ..Front::default()
             },
         );
-        assert_eq!(junk(&titled, &body_of(20), scratch()), None);
+        assert_eq!(junk(&titled, &body_of(20), scratch(), "daily"), None);
+    }
+
+    #[test]
+    fn a_daily_note_named_only_by_its_day_is_not_a_candidate_for_that() {
+        let daily = note("personal/daily/2026-09-23.md", Front::default());
+        assert_eq!(
+            junk(&daily, &body_of(40), scratch(), "personal/daily"),
+            None
+        );
+        assert_eq!(
+            junk(&daily, "", scratch(), "personal/daily"),
+            Some(Junk::Empty)
+        );
     }
 
     /// A name is whatever the writer typed, and this repository's owner writes
@@ -1200,8 +1223,8 @@ mod tests {
                 let _ = note.shown("/home/me");
                 let _ = row(&note);
                 let _ = prefix(&note, &cfg, 8, utc());
-                let _ = junk(&note, "", scratch());
-                let _ = junk(&note, &"word ".repeat(20), scratch());
+                let _ = junk(&note, "", scratch(), "daily");
+                let _ = junk(&note, &"word ".repeat(20), scratch(), "daily");
                 let widths = Widths::of(std::slice::from_ref(&note), &cfg, "/home/me");
                 let _ = status_row(&note, &cfg, &widths, utc(), "/home/me");
                 let _ = junk_row(&note, Junk::Untitled, 10, &widths);
@@ -1216,7 +1239,7 @@ mod tests {
         for name in ["Prosjektø", "Løsningø", "abcdefgø", "Størrelse"] {
             let note = note(&format!("{name}.md"), Front::default());
             assert_ne!(
-                junk(&note, &"word ".repeat(20), scratch()),
+                junk(&note, &"word ".repeat(20), scratch(), "daily"),
                 Some(Junk::Untitled),
                 "{name}"
             );
@@ -1303,12 +1326,12 @@ mod tests {
             path: scratch().to_path_buf(),
             ..note("scratch/scratch.md", Front::default())
         };
-        assert_eq!(junk(&pad, "", scratch()), None);
-        assert_eq!(junk(&pad, "Untitled", scratch()), None);
+        assert_eq!(junk(&pad, "", scratch(), "daily"), None);
+        assert_eq!(junk(&pad, "Untitled", scratch(), "daily"), None);
 
         // Its neighbours are offered as usual.
         let other = note("scratch/other.md", Front::default());
-        assert_eq!(junk(&other, "", scratch()), Some(Junk::Empty));
+        assert_eq!(junk(&other, "", scratch(), "daily"), Some(Junk::Empty));
     }
 
     /// Front matter is read character by character too, and a Norwegian tag is
@@ -1486,18 +1509,29 @@ const LINE_COLOR: u8 = 3;
 
 // --- new notes --------------------------------------------------------------
 
-/// The file a note called `title` is started in on the day `now` falls on:
-/// `YYYY-MM-DD-<slug>.md`, in local time.
-///
-/// The date leads so a directory listing is a timeline, and the slug follows
-/// so the name still says what the note is about. A title with nothing in it a
-/// slug can use is named for the day alone.
-pub fn titled_name(title: &str, now: i64, offset: time::UtcOffset) -> String {
-    let day = date(now, offset);
+/// Where `note new` puts a note when `[note] inbox` does not say.
+pub const DEFAULT_INBOX: &str = "inbox";
+
+/// Where `note daily` puts the day's note when `[note] daily` does not say.
+pub const DEFAULT_DAILY: &str = "daily";
+
+/// The file a note called `title` is started in: its title in kebab case. A
+/// title with nothing in it a slug can use is `note.md`.
+pub fn titled_name(title: &str) -> String {
     match slug(title).as_str() {
-        "" => format!("{day}.md"),
-        slug => format!("{day}-{slug}.md"),
+        "" => "note.md".to_string(),
+        slug => format!("{slug}.md"),
     }
+}
+
+/// The file the note for `day`, a `YYYY-MM-DD` date, lives in.
+pub fn daily_name(day: &str) -> String {
+    format!("{day}.md")
+}
+
+/// The title the note for `day` carries.
+pub fn daily_title(day: &str) -> String {
+    format!("Daily - {day}")
 }
 
 /// `title` in kebab case: lowercase words joined by `-`.
@@ -1518,9 +1552,13 @@ pub fn slug(title: &str) -> String {
         .join("-")
 }
 
-/// What a new note's file starts with: its title, as the one H1.
-pub fn heading(title: &str) -> String {
-    format!("# {}\n", title.trim())
+/// What a new note's file starts with: front matter dating it to `day`, a
+/// `YYYY-MM-DD` date, then its title as the one H1.
+///
+/// The date lives in the front matter rather than the filename, which is where
+/// a listing reads a note's creation date from.
+pub fn new_note(title: &str, day: &str) -> String {
+    format!("---\ncreated: {day}\n---\n\n# {}\n", title.trim())
 }
 
 /// A name nothing is using yet: `name`, else `name-2`, `name-3` and so on.
@@ -1666,17 +1704,19 @@ mod search_tests {
     // --- new notes ---
 
     #[test]
-    fn a_titled_name_is_the_date_then_the_title_in_kebab_case() {
-        let sept_23 = 1_790_121_600;
-        assert_eq!(
-            titled_name("Migrate to AWS", sept_23, utc()),
-            "2026-09-23-migrate-to-aws.md"
-        );
+    fn a_titled_name_is_the_title_in_kebab_case() {
+        assert_eq!(titled_name("Migrate to AWS"), "migrate-to-aws.md");
     }
 
     #[test]
-    fn a_title_with_nothing_to_slug_is_named_for_the_day() {
-        assert_eq!(titled_name("  ?! ", 0, utc()), "1970-01-01.md");
+    fn a_title_with_nothing_to_slug_is_still_a_name() {
+        assert_eq!(titled_name("  ?! "), "note.md");
+    }
+
+    #[test]
+    fn a_daily_note_is_named_and_titled_for_its_day() {
+        assert_eq!(daily_name("2026-09-23"), "2026-09-23.md");
+        assert_eq!(daily_title("2026-09-23"), "Daily - 2026-09-23");
     }
 
     #[test]
@@ -1694,9 +1734,19 @@ mod search_tests {
         }
     }
 
+    /// Front matter the listing can read the creation date back out of, a
+    /// blank line, then the title.
     #[test]
-    fn a_heading_is_the_trimmed_title_as_an_h1() {
-        assert_eq!(heading(" Migrate to AWS "), "# Migrate to AWS\n");
+    fn a_new_note_is_front_matter_then_its_title() {
+        let text = new_note(" Keychain project spec ", "2024-11-22");
+        assert_eq!(
+            text,
+            "---\ncreated: 2024-11-22\n---\n\n# Keychain project spec\n"
+        );
+        let (block, body) = split_front_matter(&text);
+        let front = parse_front(block.unwrap(), utc());
+        assert_eq!(date(front.created.unwrap(), utc()), "2024-11-22");
+        assert_eq!(body.trim(), "# Keychain project spec");
     }
 
     #[test]
@@ -1771,8 +1821,10 @@ const MIN_BODY: usize = 24;
 /// links to, a note nothing has opened in a year — is a judgement about what
 /// the vault is *for*, and this is a list to look through rather than a verdict.
 ///
-/// `scratch` is the one note that is never on it, whatever it holds.
-pub fn junk(note: &Note, body: &str, scratch: &Path) -> Option<Junk> {
+/// `scratch` is the one note that is never on it, whatever it holds. The notes
+/// under `daily`, a directory below the vault, are named for their day by
+/// design, so a name without a letter in it is no reason to offer one.
+pub fn junk(note: &Note, body: &str, scratch: &Path, daily: &str) -> Option<Junk> {
     // Being empty is what the scratch note is *for* — it is emptied every time
     // it is used up — so offering to delete it would offer that on every run.
     if note.path == scratch {
@@ -1786,7 +1838,10 @@ pub fn junk(note: &Note, body: &str, scratch: &Path) -> Option<Junk> {
         return Some(Junk::Untitled);
     }
     // A front matter title is a name, wherever the file's own name came from.
-    if note.front.title.is_none() && !name.chars().any(char::is_alphabetic) {
+    if note.front.title.is_none()
+        && !name.chars().any(char::is_alphabetic)
+        && !under(&note.rel, daily)
+    {
         return Some(Junk::Unnamed);
     }
     None

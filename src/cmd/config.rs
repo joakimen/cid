@@ -88,6 +88,15 @@ ignore = ["node_modules", "target"]
 # the root; its directory is created the first time.
 # scratch = "scratch/scratch.md"
 
+# Where `note new` starts a note, as a directory below the root; subdirectories
+# are fine. Created the first time.
+# inbox = "inbox"
+
+# Where `note daily` keeps one note per day, named `YYYY-MM-DD.md`, as a
+# directory below the root. `note cleanup` does not hold a name made only of a
+# date against a note in it.
+# daily = "daily"
+
 # What `note open` launches, split on whitespace like $EDITOR. Its own setting
 # because a note is as often read as written — `glow` and `nvim` are both
 # answers. Unset, it is $VISUAL then $EDITOR, as `cid edit` uses.
@@ -127,6 +136,7 @@ ignore = ["node_modules", "target"]
 # f7     = "pr-checkout"      # check out a pull request
 # ctrl-f7 = "pr-worktree-cd"  # the same, in a worktree of its own, and cd there
 # f10    = "note-edit"        # open a note from the vault
+# ctrl-f10 = "note-daily"     # open today's note, starting it if need be
 # ctrl-r = "history-select"   # search history onto the command line
 # up     = "history-up"       # the same, on the first line of a prompt
 
@@ -404,6 +414,15 @@ fn report(cfg: &Config, env: &Env) -> Vec<Row> {
             DEFAULT,
         ),
     });
+    for (key, set, default) in [
+        ("inbox", &cfg.note.inbox, crate::note::DEFAULT_INBOX),
+        ("daily", &cfg.note.daily, crate::note::DEFAULT_DAILY),
+    ] {
+        rows.push(match set.as_deref() {
+            Some(dir) => Row::setting(key, Value::Set(dir.to_string()), ""),
+            None => Row::setting(key, Value::Set(default.to_string()), DEFAULT),
+        });
+    }
     rows.push(match (cfg.note.editor.as_deref(), env.editor) {
         (Some(editor), _) => Row::setting("editor", Value::Set(editor.to_string()), ""),
         (None, Some(editor)) => Row::setting(
@@ -1642,7 +1661,8 @@ mod tests {
 
         let sound = shell_check(&sound_config);
         assert_eq!(sound.status, Status::Ok);
-        assert!(sound.detail.contains("11 key bindings"), "{}", sound.detail);
+        let bound = format!("{} key bindings", binding::EXAMPLE_BINDINGS.len());
+        assert!(sound.detail.contains(&bound), "{}", sound.detail);
 
         // Nothing written is nothing bound, and that is a sound state.
         let empty = shell_check(&Config::default());

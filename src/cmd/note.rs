@@ -312,44 +312,88 @@ fn item(
 
 /// `cid note new [TITLE]` — start a note called `TITLE` and open it.
 ///
-/// With no title, one is asked for, with the filename it will produce drawn
-/// beneath it as it is typed. The note is `YYYY-MM-DD-<title-in-kebab-case>.md`
-/// at the top of the vault, and starts as the title for its H1 — which leaves
-/// a note abandoned there a heading and nothing else, what `note cleanup`
-/// offers as empty.
+/// With no title, one is asked for, with the path it will produce drawn
+/// beneath it as it is typed. The note is `<title-in-kebab-case>.md` under
+/// `[note] inbox`, dated in its front matter and titled with an H1 — which
+/// leaves a note abandoned there a heading and nothing else, what `note
+/// cleanup` offers as empty.
 pub fn new(ctx: &Ctx, title: Option<&str>) -> Result<()> {
     let editor = ctx.note_editor()?;
     let root = vault(ctx)?;
-    let (now, offset) = (crate::unix_now(), ctx.utc_offset());
+    let inbox = ctx.config.note.inbox_dir();
+    let dir = root.join(inbox);
     let file_for = |title: &str| {
-        note::free_name(&note::titled_name(title, now, offset), |candidate| {
-            root.join(candidate).exists()
+        note::free_name(&note::titled_name(title), |candidate| {
+            dir.join(candidate).exists()
         })
     };
 
-    let title =
-        match title.map(str::trim) {
-            Some("") => bail!("a note's title cannot be blank"),
-            Some(title) => title.to_string(),
-            None => prompt::ask("Title", "File", file_for, ctx.color()).map_err(|e| {
-                match e.is::<select::Cancelled>() {
-                    true => e,
-                    false => e.context("no TITLE given and no terminal to ask for one"),
-                }
-            })?,
-        };
-    let path = root.join(file_for(&title));
+    let title = match title.map(str::trim) {
+        Some("") => bail!("a note's title cannot be blank"),
+        Some(title) => title.to_string(),
+        None => prompt::ask(
+            "Title",
+            "File",
+            |title| format!("{}/{}", inbox.trim_end_matches('/'), file_for(title)),
+            ctx.color(),
+        )
+        .map_err(|e| match e.is::<select::Cancelled>() {
+            true => e,
+            false => e.context("no TITLE given and no terminal to ask for one"),
+        })?,
+    };
+    let path = dir.join(file_for(&title));
+    create(&path, &note::new_note(&title, &today(ctx)))?;
+    launch_on(ctx, &editor, &path)
+}
 
+/// `cid note daily` — open today's note, starting it if there is none yet.
+///
+/// One note per day, `YYYY-MM-DD.md` under `[note] daily`: a second run on the
+/// same day opens the note the first one started.
+pub fn daily(ctx: &Ctx) -> Result<()> {
+    let editor = ctx.note_editor()?;
+    let root = vault(ctx)?;
+    let day = today(ctx);
+    let path = root
+        .join(ctx.config.note.daily_dir())
+        .join(note::daily_name(&day));
+    match create(&path, &note::new_note(&note::daily_title(&day), &day)) {
+        Ok(()) => {}
+        Err(e) if already_there(&e) => ctx.log.info("today's note is already started"),
+        Err(e) => return Err(e),
+    }
+    launch_on(ctx, &editor, &path)
+}
+
+/// Today, `YYYY-MM-DD`, in local time.
+fn today(ctx: &Ctx) -> String {
+    note::date(crate::unix_now(), ctx.utc_offset())
+}
+
+/// Write `text` to `path` as a new file, making its directory first. Never
+/// overwrites: a file already at `path` is an [`std::io::ErrorKind::AlreadyExists`].
+fn create(path: &Path, text: &str) -> Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    }
     std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(&path)
-        .and_then(|mut file| std::io::Write::write_all(&mut file, note::heading(&title).as_bytes()))
-        .with_context(|| format!("creating {}", path.display()))?;
+        .open(path)
+        .and_then(|mut file| std::io::Write::write_all(&mut file, text.as_bytes()))
+        .with_context(|| format!("creating {}", path.display()))
+}
 
+fn already_there(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<std::io::Error>()
+        .is_some_and(|io| io.kind() == std::io::ErrorKind::AlreadyExists)
+}
+
+fn launch_on(ctx: &Ctx, editor: &[String], path: &Path) -> Result<()> {
     let target = path.to_string_lossy().into_owned();
-    ctx.log.info(&format!("new note at {target}"));
-    cmd::edit::launch(ctx, &editor, std::slice::from_ref(&target))
+    ctx.log.info(&format!("opening {target}"));
+    cmd::edit::launch(ctx, editor, std::slice::from_ref(&target))
 }
 
 /// `cid note scratch` — open the one note that is filed nowhere.
@@ -485,7 +529,8 @@ fn junk(ctx: &Ctx, notes: &[Note]) -> Result<Vec<(Note, note::Junk, u64)>> {
             let bytes = note.path.metadata().map(|m| m.len()).unwrap_or(0);
             let text = read_head(&note.path, CLEANUP_BYTES).unwrap_or_default();
             let (_, body) = note::split_front_matter(&text);
-            note::junk(note, body, &scratch).map(|reason| (note.clone(), reason, bytes))
+            note::junk(note, body, &scratch, ctx.config.note.daily_dir())
+                .map(|reason| (note.clone(), reason, bytes))
         })
         .collect();
     note::cleanup_order(&mut candidates);
