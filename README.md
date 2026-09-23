@@ -38,7 +38,7 @@ cargo install --git https://github.com/joakimen/cid
 cid config init     # write ~/.config/cid/config.toml, then set `root`
 cid init <shell>    # shell functions, key bindings and completions, to source
 cid config print    # every setting, and what is in force for it
-cid config check    # what cid reaches for, and what is missing
+cid doctor          # what cid reaches for, and what is missing
 ```
 
 ## Commands
@@ -55,7 +55,8 @@ cid config check    # what cid reaches for, and what is missing
 | `cid ps` | what is running, and what to kill |
 | `cid history` | the commands you have already run, back onto the command line |
 | `cid project` | builds or installs `$PWD`, whatever it turns out to be written in |
-| `cid config` | write, read back and check the configuration |
+| `cid config` | write and read back the configuration |
+| `cid doctor` | what cid reaches for, and what is missing |
 | `cid stats` | what you run, how often, and how long cid takes over it |
 | `cid init` | the shell integration below |
 
@@ -83,7 +84,7 @@ b  = "project-build"        # cid project build
 
 What a table holds is the whole of what is bound, so leaving a key out is how
 it stays free. `cid config actions` lists every action with whatever is bound
-to it, `cid config print` lists what you have, and `cid config check` says
+to it, `cid config print` lists what you have, and `cid doctor` says
 whether they all resolve — an action cid
 does not define stops `cid init` rather than emitting a shell where one key
 silently does nothing.

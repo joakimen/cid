@@ -571,12 +571,12 @@ fn a_broken_config_names_the_file() {
 }
 
 #[test]
-fn config_check_passes_on_a_sound_setup() {
+fn doctor_passes_on_a_sound_setup() {
     let sandbox = Sandbox::new();
     mk_repo(&sandbox.home().join("dev/github.com"), "acme", "billing");
     sandbox.write_config("[repo]\nroot = \"~/dev/github.com\"\n");
 
-    let run = sandbox.run(&["config", "check"]);
+    let run = sandbox.run(&["doctor"]);
     run.ok();
     assert!(run.stdout.contains("repo root"), "{}", run.stdout);
     // Discovery is really run: the count is what answers "is my root right".
@@ -585,11 +585,11 @@ fn config_check_passes_on_a_sound_setup() {
 }
 
 #[test]
-fn config_check_fails_on_a_missing_root() {
+fn doctor_fails_on_a_missing_root() {
     let sandbox = Sandbox::new();
     sandbox.write_config("[repo]\nroot = \"~/not/here\"\n");
 
-    let run = sandbox.run(&["config", "check"]);
+    let run = sandbox.run(&["doctor"]);
     run.code(1);
     assert!(
         run.stdout
@@ -602,14 +602,14 @@ fn config_check_fails_on_a_missing_root() {
     assert!(!run.stdout.contains('\x1b'), "colour through a pipe");
 }
 
-/// `config check` and `--color` were written in parallel, each green on its
+/// `doctor` and `--color` were written in parallel, each green on its
 /// own branch, and the merge did not compile. Nothing tied the two together.
 #[test]
-fn config_check_honours_the_color_flag() {
+fn doctor_honours_the_color_flag() {
     let sandbox = Sandbox::new();
     sandbox.write_config("[repo]\nroot = \"~/not/here\"\n");
 
-    let forced = sandbox.run(&["--color", "always", "config", "check"]);
+    let forced = sandbox.run(&["--color", "always", "doctor"]);
     forced.code(1);
     assert!(
         forced.stdout.contains('\x1b'),
@@ -619,11 +619,11 @@ fn config_check_honours_the_color_flag() {
 }
 
 #[test]
-fn config_check_does_not_report_one_problem_twice() {
+fn doctor_does_not_report_one_problem_twice() {
     let sandbox = Sandbox::new();
     sandbox.write_config("[repo]\nroot = \"~/not/here\"\n");
 
-    let run = sandbox.run(&["config", "check"]);
+    let run = sandbox.run(&["doctor"]);
     run.code(1);
     assert_eq!(
         run.stdout
@@ -2225,7 +2225,7 @@ fn note_ls_says_the_archives_are_why_it_found_nothing() {
 /// An archive path is relative to the vault, and one that names nothing hides
 /// nothing — which is a setting the user meant and did not get.
 #[test]
-fn config_check_reports_an_archive_that_is_not_there() {
+fn doctor_reports_an_archive_that_is_not_there() {
     let sandbox = Sandbox::new();
     let vault = sandbox.home().join("notes");
     mk_note(&vault, "work/plan.md", "plan\n", 1_000);
@@ -2234,7 +2234,7 @@ fn config_check_reports_an_archive_that_is_not_there() {
         vault.display().to_string()
     ));
 
-    let run = sandbox.run(&["config", "check"]);
+    let run = sandbox.run(&["doctor"]);
     assert!(run.stdout.contains("work/archive"), "{}", run.stdout);
 }
 
@@ -2411,13 +2411,13 @@ fn note_open_falls_back_to_the_environment_editor() {
     );
 }
 
-/// `config check` is what a setup script runs, so a configured vault has to
+/// `doctor` is what a setup script runs, so a configured vault has to
 /// report as found rather than as a thing cid knows nothing about.
 #[test]
-fn config_check_counts_the_notes_in_the_vault() {
+fn doctor_counts_the_notes_in_the_vault() {
     let sandbox = Sandbox::new();
     mk_vault(&sandbox);
-    let run = sandbox.run(&["config", "check"]);
+    let run = sandbox.run(&["doctor"]);
     assert!(run.stdout.contains("3 notes"), "{}", run.stdout);
     assert!(run.stdout.contains("note editor"), "{}", run.stdout);
     // `note open` shells out to it to search, so the report says whether it is
@@ -2620,7 +2620,7 @@ fn every_note_command_survives_a_vault_that_is_not_ascii() {
     sandbox.run(&["note", "open", "øvelser.md"]).ok();
     sandbox.run(&["note", "new", "Løsningsforslag"]).ok();
     sandbox.run(&["note", "scratch"]).ok();
-    sandbox.run(&["config", "check"]);
+    sandbox.run(&["doctor"]);
 
     // The one that crashed. Without a terminal it stops at the selector, which
     // is past every byte offset that was the bug.
@@ -2961,7 +2961,7 @@ fn the_shell_integration_is_counted_by_check_and_named_by_print() {
     let sandbox = Sandbox::new();
     sandbox.write_config("[shell.aliases]\nbuild = \"project-build\"\n");
 
-    let check = sandbox.run(&["config", "check"]);
+    let check = sandbox.run(&["doctor"]);
     let row = check
         .lines()
         .into_iter()
@@ -2980,11 +2980,11 @@ fn the_shell_integration_is_counted_by_check_and_named_by_print() {
 }
 
 #[test]
-fn config_check_fails_on_a_binding_nothing_answers_to() {
+fn doctor_fails_on_a_binding_nothing_answers_to() {
     let sandbox = Sandbox::new();
     sandbox.write_config("[shell.bindings]\nctrl-o = \"repo-jump\"\n");
 
-    let run = sandbox.run(&["config", "check"]);
+    let run = sandbox.run(&["doctor"]);
     run.code(1);
     assert!(
         run.stdout.contains("repo-jump"),
