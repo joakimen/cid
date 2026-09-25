@@ -13,6 +13,10 @@ raised, never by hand.
 
 ## Unreleased
 
+## v0.24.1
+
+*Released 2026-09-25*
+
 ### Fixed
 
 - **`cid repo clone <owner>`** lists up to `--limit` repositories that are not
