@@ -892,13 +892,10 @@ fn person_or_me(owner: &str) -> Source {
 /// Every repository belonging to `owner`, archived ones only when `archived`,
 /// and at most `limit` of them.
 pub fn list_repos(owner: &str, limit: usize, archived: bool) -> Result<Vec<Repo>> {
-    // Archived rows are dropped after the fact — GitHub's listing has no filter
-    // for them — so the cap the limit imposes is on pages rather than on rows.
-    let cap = limit.div_ceil(PAGE_SIZE).max(1);
-    let speculative = cap.min(SPECULATIVE_PAGES);
+    let speculative = limit.div_ceil(PAGE_SIZE).clamp(1, SPECULATIVE_PAGES);
 
     let org = Source::Org(owner.to_string());
-    let (source, mut bodies, last) = match first_pages(&org, speculative) {
+    let (source, bodies, last) = match first_pages(&org, speculative) {
         Ok((bodies, last)) => (org, bodies, last),
         Err(err) if is_not_found(&err) => {
             let source = person_or_me(owner);
@@ -908,20 +905,47 @@ pub fn list_repos(owner: &str, limit: usize, archived: bool) -> Result<Vec<Repo>
         Err(err) => return Err(err),
     };
 
-    let wanted = last.min(cap);
-    if wanted > speculative {
-        bodies.extend(fetch_pages(&source, speculative + 1..=wanted)?);
-    }
-
     let mut repos = Vec::new();
-    for body in &bodies {
-        repos.extend(parse_repos(body)?);
-    }
-    if !archived {
-        repos.retain(|repo| !repo.archived);
+    extend_repos(&mut repos, &bodies, archived)?;
+
+    let mut fetched = speculative;
+    while let Some(pages) = next_pages(fetched, last, repos.len(), limit) {
+        fetched = *pages.end();
+        extend_repos(&mut repos, &fetch_pages(&source, pages)?, archived)?;
     }
     repos.truncate(limit);
     Ok(repos)
+}
+
+/// Append the repositories in `bodies` to `repos`, archived ones only when
+/// `archived`.
+fn extend_repos(repos: &mut Vec<Repo>, bodies: &[String], archived: bool) -> Result<()> {
+    for body in bodies {
+        let page = parse_repos(body)?;
+        repos.extend(page.into_iter().filter(|repo| archived || !repo.archived));
+    }
+    Ok(())
+}
+
+/// The pages to fetch after the first `fetched`, when they yielded `kept` of
+/// the `limit` rows wanted and the listing ends at page `last`; `None` once
+/// either is reached.
+///
+/// Archived rows are dropped after they arrive — GitHub's listing has no filter
+/// for them — so how many pages hold `limit` rows is not known up front. Each
+/// batch covers at least the shortfall, and never fewer than [`PAGE_WORKERS`]
+/// pages, since a smaller batch costs the same one round trip.
+fn next_pages(
+    fetched: usize,
+    last: usize,
+    kept: usize,
+    limit: usize,
+) -> Option<std::ops::RangeInclusive<usize>> {
+    if kept >= limit || fetched >= last {
+        return None;
+    }
+    let short = (limit - kept).div_ceil(PAGE_SIZE).max(PAGE_WORKERS);
+    Some(fetched + 1..=(fetched + short).min(last))
 }
 
 /// The first `pages` pages of `source`, and the page the listing actually ends
@@ -1493,6 +1517,27 @@ mod tests {
         assert_eq!(last_page(""), 1);
         // A `next` with no `last` is the final page of a cursor-style listing.
         assert_eq!(last_page("link: <https://x/?page=9>; rel=\"next\""), 1);
+    }
+
+    #[test]
+    fn archived_rows_do_not_count_toward_the_limit() {
+        // Ten pages read, half of every one archived: 500 kept of 1000 wanted.
+        assert_eq!(next_pages(10, 20, 500, 1000), Some(11..=18));
+    }
+
+    #[test]
+    fn a_batch_is_never_smaller_than_the_workers_that_fetch_it() {
+        // One page short, but eight cost the same wait as one.
+        assert_eq!(next_pages(4, 30, 390, 400), Some(5..=12));
+        assert_eq!(next_pages(4, 30, 100, 1000), Some(5..=13));
+    }
+
+    #[test]
+    fn fetching_stops_at_the_limit_or_the_last_page() {
+        assert_eq!(next_pages(4, 30, 400, 400), None);
+        assert_eq!(next_pages(4, 30, 450, 400), None);
+        assert_eq!(next_pages(4, 4, 10, 1000), None);
+        assert_eq!(next_pages(4, 6, 10, 1000), Some(5..=6));
     }
 
     #[test]

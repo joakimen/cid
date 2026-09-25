@@ -13,6 +13,13 @@ raised, never by hand.
 
 ## Unreleased
 
+### Fixed
+
+- **`cid repo clone <owner>`** lists up to `--limit` repositories that are not
+  archived. It used to stop after `--limit` rows including the archived ones
+  it then hid, so an org with many archived repositories showed only part of
+  the rest, and gave no note that the list had been cut short.
+
 ## v0.24.0
 
 *Released 2026-09-23*
