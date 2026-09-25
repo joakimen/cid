@@ -30,7 +30,7 @@ fmt-check:
 
 .PHONY: install
 install:
-	cargo install --path . --force
+	cargo install --locked --path . --force
 
 # Install the git hooks in prek.toml. Opt-in, and once per clone — the hooks
 # directory lives in the common `.git`, so every worktree shares it.
