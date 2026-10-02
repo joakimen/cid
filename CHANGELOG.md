@@ -13,6 +13,13 @@ raised, never by hand.
 
 ## Unreleased
 
+### Changed
+
+- **`cid note new`** refuses a title whose file is already in the inbox
+  instead of quietly starting `<name>-2.md` beside it. The prompt turns the
+  path red and says it already exists as you type, and Enter does nothing
+  until the title is one of its own.
+
 ### Fixed
 
 - **`cid repo clone <owner>`** lists up to `--limit` repositories that are not

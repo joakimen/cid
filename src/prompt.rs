@@ -142,6 +142,18 @@ const ARROW_COLOR: u8 = 6;
 /// The colour of the previewed answer: green, as a thing about to be made.
 const PREVIEW_COLOR: u8 = 2;
 
+/// The colour of a previewed answer that cannot be given: red.
+const BLOCKED_COLOR: u8 = 1;
+
+/// What the answer typed so far would become.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Preview {
+    /// Enter gives this answer.
+    Ready(String),
+    /// Enter does nothing, and `reason` says why beside `value`.
+    Blocked { value: String, reason: String },
+}
+
 /// What one frame of the prompt draws, row by row, and the column the cursor
 /// belongs in on the first. The labels are padded to one width so the two
 /// values line up.
@@ -149,24 +161,30 @@ pub fn render(
     label: &str,
     line: &Line,
     preview_label: &str,
-    preview: &str,
+    preview: &Preview,
     color: bool,
 ) -> (Vec<String>, usize) {
     let width = label.width().max(preview_label.width());
     let arrow = term::paint(ARROW, ARROW_COLOR, color);
     let head = |text: &str| term::bold(&format!("{text:>width$}"), color);
+    let (value, keys) = match preview {
+        Preview::Ready(value) => (
+            term::style(value, Some(PREVIEW_COLOR), true, color),
+            "enter to create · esc to cancel",
+        ),
+        Preview::Blocked { value, reason } => (
+            format!(
+                "{}  {}",
+                term::style(value, Some(BLOCKED_COLOR), true, color),
+                term::paint(&format!("✗ {reason}"), BLOCKED_COLOR, color)
+            ),
+            "esc to cancel",
+        ),
+    };
     let rows = vec![
         format!("{} {arrow} {}", head(label), line.text()),
-        format!(
-            "{} {arrow} {}",
-            head(preview_label),
-            term::style(preview, Some(PREVIEW_COLOR), true, color)
-        ),
-        term::paint(
-            &format!("{:width$}   enter to create · esc to cancel", ""),
-            term::SECONDARY,
-            color,
-        ),
+        format!("{} {arrow} {value}", head(preview_label)),
+        term::paint(&format!("{:width$}   {keys}", ""), term::SECONDARY, color),
     ];
     // `width` columns of label, then ` › `.
     let column = width + 3 + line.before_cursor().width();
@@ -176,12 +194,13 @@ pub fn render(
 /// Ask for a line of text on the terminal, showing what `preview` makes of it
 /// below as it is typed.
 ///
-/// Returns [`Cancelled`] when the user backs out. Fails when stdin or stderr is
+/// `preview` runs on every key, and Enter is ignored while it says
+/// [`Preview::Blocked`]. Returns [`Cancelled`] when the user backs out. Fails when stdin or stderr is
 /// not a terminal, since there is nobody to ask.
 pub fn ask(
     label: &str,
     preview_label: &str,
-    preview: impl Fn(&str) -> String,
+    preview: impl Fn(&str) -> Preview,
     color: bool,
 ) -> anyhow::Result<String> {
     if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
@@ -204,7 +223,10 @@ pub fn ask(
         }
         match line.apply(key) {
             Step::Edit => {}
-            Step::Submit(text) => break Ok(text),
+            Step::Submit(text) => match preview(&text) {
+                Preview::Ready(_) => break Ok(text),
+                Preview::Blocked { .. } => {}
+            },
             Step::Cancel => break Err(Cancelled.into()),
         }
     };
@@ -352,7 +374,8 @@ mod tests {
 
     #[test]
     fn a_frame_lines_up_the_values_and_places_the_cursor_after_the_text() {
-        let (rows, column) = render("Title", &Line::new("Møte"), "File", "x.md", false);
+        let ready = Preview::Ready("x.md".into());
+        let (rows, column) = render("Title", &Line::new("Møte"), "File", &ready, false);
         assert_eq!(rows[0], "Title › Møte");
         assert_eq!(rows[1], " File › x.md");
         assert_eq!(column, "Title › ".width() + "Møte".width());
@@ -360,7 +383,19 @@ mod tests {
 
     #[test]
     fn a_frame_without_colour_carries_no_escape_codes() {
-        let (rows, _) = render("Title", &Line::new("a"), "File", "a.md", false);
+        let ready = Preview::Ready("a.md".into());
+        let (rows, _) = render("Title", &Line::new("a"), "File", &ready, false);
         assert!(rows.iter().all(|row| !row.contains('\x1b')));
+    }
+
+    #[test]
+    fn a_blocked_frame_says_why_in_words_and_offers_no_enter() {
+        let blocked = Preview::Blocked {
+            value: "a.md".into(),
+            reason: "already exists".into(),
+        };
+        let (rows, _) = render("Title", &Line::new("a"), "File", &blocked, false);
+        assert_eq!(rows[1], " File › a.md  ✗ already exists");
+        assert!(!rows[2].contains("enter"), "{}", rows[2]);
     }
 }

@@ -322,10 +322,12 @@ pub fn new(ctx: &Ctx, title: Option<&str>) -> Result<()> {
     let root = vault(ctx)?;
     let inbox = ctx.config.note.inbox_dir();
     let dir = root.join(inbox);
-    let file_for = |title: &str| {
-        note::free_name(&note::titled_name(title), |candidate| {
-            dir.join(candidate).exists()
-        })
+    let shown = |title: &str| {
+        format!(
+            "{}/{}",
+            inbox.trim_end_matches('/'),
+            note::titled_name(title)
+        )
     };
 
     let title = match title.map(str::trim) {
@@ -334,7 +336,13 @@ pub fn new(ctx: &Ctx, title: Option<&str>) -> Result<()> {
         None => prompt::ask(
             "Title",
             "File",
-            |title| format!("{}/{}", inbox.trim_end_matches('/'), file_for(title)),
+            |title| match dir.join(note::titled_name(title)).exists() {
+                false => prompt::Preview::Ready(shown(title)),
+                true => prompt::Preview::Blocked {
+                    value: shown(title),
+                    reason: "already exists".to_string(),
+                },
+            },
             ctx.color(),
         )
         .map_err(|e| match e.is::<select::Cancelled>() {
@@ -342,8 +350,13 @@ pub fn new(ctx: &Ctx, title: Option<&str>) -> Result<()> {
             false => e.context("no TITLE given and no terminal to ask for one"),
         })?,
     };
-    let path = dir.join(file_for(&title));
-    create(&path, &note::new_note(&title, &today(ctx)))?;
+    let path = dir.join(note::titled_name(&title));
+    match create(&path, &note::new_note(&title, &today(ctx))) {
+        Err(e) if already_there(&e) => {
+            bail!("{} already exists; give it another title", shown(&title))
+        }
+        result => result?,
+    }
     launch_on(ctx, &editor, &path)
 }
 

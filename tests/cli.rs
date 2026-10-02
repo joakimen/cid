@@ -2312,22 +2312,26 @@ fn note_daily_starts_todays_note_once_and_reopens_it_after() {
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "written since\n");
 }
 
-/// One title typed twice is a second note, never the first one reopened.
+/// A title whose file already exists is refused, and that note left as it was.
 #[test]
-fn note_new_never_hands_back_a_name_already_in_use() {
+fn note_new_refuses_a_title_whose_file_already_exists() {
     let sandbox = Sandbox::new();
-    mk_vault(&sandbox);
+    let vault = mk_vault(&sandbox);
     let first = sandbox.run(&["note", "new", "Standup"]);
     first.ok();
-    let second = sandbox.run(&["note", "new", "Standup"]);
-    second.ok();
+    let path = opened(&first);
+    std::fs::write(&path, "written since\n").unwrap();
 
-    let first = opened(&first);
-    let second = opened(&second);
-    assert_eq!(
-        second.to_str().unwrap(),
-        first.to_str().unwrap().replace(".md", "-2.md")
+    let second = sandbox.run(&["note", "new", "Standup"]);
+    second.code(1);
+    assert!(
+        second.stderr.contains("already exists"),
+        "{}",
+        second.stderr
     );
+    assert!(second.stdout.is_empty(), "{}", second.stdout);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "written since\n");
+    assert_eq!(std::fs::read_dir(vault.join("inbox")).unwrap().count(), 1);
 }
 
 /// Without a title the command asks for one, and a script has no way to answer.

@@ -471,8 +471,9 @@ enum NoteCmd {
     /// it as it is typed. The note is created under `[note] inbox` as
     /// `<title-in-kebab-case>.md` — `Migrate to AWS` becomes
     /// `inbox/migrate-to-aws.md` — with today's date as `created:` in its front
-    /// matter and the title as its H1. A name already taken gains `-2`, `-3`
-    /// and so on.
+    /// matter and the title as its H1. A title whose file already exists is
+    /// refused — the prompt marks it as it is typed — so a note is never
+    /// reopened or overwritten by starting another.
     New {
         /// The note's title; omit to be asked for one
         #[arg(value_name = "TITLE")]
