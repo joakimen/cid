@@ -13,6 +13,10 @@ raised, never by hand.
 
 ## Unreleased
 
+## v0.24.1
+
+*Released 2026-10-02*
+
 ### Changed
 
 - **`cid note new`** refuses a title whose file is already in the inbox
