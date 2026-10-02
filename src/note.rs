@@ -1561,26 +1561,6 @@ pub fn new_note(title: &str, day: &str) -> String {
     format!("---\ncreated: {day}\n---\n\n# {}\n", title.trim())
 }
 
-/// A name nothing is using yet: `name`, else `name-2`, `name-3` and so on.
-///
-/// Two notes started in the same minute is not an error, and neither is one
-/// name typed twice — the second is a second note.
-pub fn free_name(name: &str, taken: impl Fn(&str) -> bool) -> String {
-    if !taken(name) {
-        return name.to_string();
-    }
-    let (stem, ext) = match name.rsplit_once('.') {
-        Some((stem, ext)) if !stem.is_empty() => (stem, format!(".{ext}")),
-        _ => (name, String::new()),
-    };
-    // Bounded only by the filesystem: a caller that finds every name taken has
-    // a directory problem rather than a naming one.
-    (2..)
-        .map(|n| format!("{stem}-{n}{ext}"))
-        .find(|candidate| !taken(candidate))
-        .expect("the integers run out before the filenames do")
-}
-
 #[cfg(test)]
 mod search_tests {
     use super::*;
@@ -1747,18 +1727,6 @@ mod search_tests {
         let front = parse_front(block.unwrap(), utc());
         assert_eq!(date(front.created.unwrap(), utc()), "2024-11-22");
         assert_eq!(body.trim(), "# Keychain project spec");
-    }
-
-    #[test]
-    fn a_name_already_taken_takes_the_next_one() {
-        let taken = |name: &str| ["a.md", "a-2.md"].contains(&name);
-        assert_eq!(free_name("a.md", taken), "a-3.md");
-        assert_eq!(free_name("b.md", taken), "b.md");
-    }
-
-    #[test]
-    fn a_name_with_no_extension_is_still_given_a_free_one() {
-        assert_eq!(free_name("a", |name| name == "a"), "a-2");
     }
 
     fn utc() -> time::UtcOffset {
