@@ -7,7 +7,7 @@ members = ["cargo:."]
 # rewrites this file, replacing every comment with a canned one, so the prose
 # below has to be put back each time.
 [dist]
-cargo-dist-version = "0.32.0"
+cargo-dist-version = "0.34.0"
 ci = "github"
 # The `curl … | sh` line every other Rust CLI leads with, built from the same
 # archives mise resolves. Nothing here reaches crates.io: `src/proc.rs` refuses
