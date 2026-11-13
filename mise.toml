@@ -12,4 +12,4 @@
 
 [tools]
 prek = "0.4.11"
-cargo-dist = "0.32.0"
+cargo-dist = "0.34.0"
