@@ -207,11 +207,18 @@ pub fn checkout_preview(path: &str) -> Preview {
 fn file_preview_cmd(path: &str) -> String {
     let path = quote(path);
     format!(
-        "bat --color=always --style=plain {theme} --line-range=:200 -- {path} 2>/dev/null \
-         || head -n 200 -- {path}",
+        "bat --color=always --style=plain {theme} {SYNTAX_MAP} --line-range=:200 -- {path} \
+         2>/dev/null || head -n 200 -- {path}",
         theme = theme_flag(),
     )
 }
+
+/// Syntaxes for extensions bat ships no grammar for, as flags for its command line.
+///
+/// JSON5 goes to JavaScript rather than JSON: bat's JSON grammar marks unquoted
+/// keys, single-quoted strings and hex numbers as invalid, and every JSON5
+/// document is an ES5 object literal.
+const SYNTAX_MAP: &str = "--map-syntax='*.json5:JavaScript'";
 
 /// How much of a file the preview shows either side of a line it is opened at.
 const LINE_CONTEXT: u32 = 12;
@@ -227,7 +234,7 @@ pub fn line_preview(path: &str, line: u32) -> Preview {
     let first = line.saturating_sub(LINE_CONTEXT).max(1);
     let last = line.saturating_add(LINE_CONTEXT);
     Preview::Command(format!(
-        "bat --color=always --style=numbers {theme} --highlight-line {line} \
+        "bat --color=always --style=numbers {theme} {SYNTAX_MAP} --highlight-line {line} \
          --line-range={first}:{last} -- {quoted} 2>/dev/null \
          || sed -n '{first},{last}p' -- {quoted}",
         theme = theme_flag(),
@@ -2024,6 +2031,16 @@ mod tests {
                 }
             }
             assert!(!open, "a brace is left open: {cmd}");
+        }
+    }
+
+    #[test]
+    fn a_json5_file_previews_with_a_syntax_bat_ships() {
+        let Preview::Command(line) = line_preview("a.json5", 3) else {
+            panic!("a line preview must run a command");
+        };
+        for cmd in [file_preview_cmd("a.json5"), line] {
+            assert!(cmd.contains("--map-syntax='*.json5:JavaScript'"), "{cmd}");
         }
     }
 
