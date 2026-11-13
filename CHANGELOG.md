@@ -13,6 +13,11 @@ raised, never by hand.
 
 ## Unreleased
 
+### Fixed
+
+- **File previews** colour `.json5` files. They used to show as plain text,
+  since bat has no syntax of its own for them.
+
 ## v0.24.1
 
 *Released 2026-10-02*
