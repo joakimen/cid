@@ -13,6 +13,10 @@ raised, never by hand.
 
 ## Unreleased
 
+## v0.24.2
+
+*Released 2026-11-13*
+
 ### Fixed
 
 - **File previews** colour `.json5` files. They used to show as plain text,
